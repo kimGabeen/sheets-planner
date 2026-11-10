@@ -285,4 +285,89 @@ test('예전 문서 속성 값은 스크립트 속성으로 옮겨짐 (넘기기
   assert.strictEqual(env.props.get('LAYOUT_VERSION'), '2');
 });
 
+
+console.log('먼슬리 일정·시간표·습관 편집');
+const evRows = (env) => env.run('readEvents_()').map((r) => [env.run('dateKey_')(r[0]), r[1], r[2], r[4] ? 'id' : '', r[5]]);
+test('먼슬리 일정 저장 → 메모 칸·위클리 일정에 표시, 할 일에는 안 들어감', () => {
+  const env = envAt(2026, 11, 11);
+  let res = env.ctx.webSaveMemoItem('2026-11-12', null, '', { title: '스터디', start: '15:00', end: '16:30', toCalendar: false }, 2026, 11);
+  assert.ok(res.ok, res.message);
+  res = env.ctx.webSaveMemoItem('2026-11-12', null, '', { title: '택배 받기', start: '', end: '', toCalendar: false }, 2026, 11);
+  assert.strictEqual(env.events.length, 0, '토글 끄면 캘린더에 안 만듦');
+  const day = res.month.dates[11];
+  same(day.items.map((it) => [it.kind, it.text, it.index]), [['memo', '택배 받기', 0], ['memo', '15:00-16:30 스터디', 1]]);
+  const b = env.ctx.webBoot();
+  same(b.week.days[3].schedule.map((x) => x.text), ['택배 받기', '15:00-16:30 스터디']);
+  assert.ok(b.week.days[3].todos.every((r) => !r[2]), '할 일 10줄은 그대로 비어 있음');
+  // 먼슬리 시트 메모 칸 (11/12 = 3번째 줄 목요일, 1일이 일요일)
+  const M = env.run('MONTHLY'), ms = env.ss.getSheetByName('먼슬리');
+  assert.strictEqual(ms.getRange(M.memoRow(2), M.dayCol(3)).getValue(), '택배 받기\n15:00-16:30 스터디');
+});
+test('일정 수정·삭제, 끝시간 오류', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSaveMemoItem('2026-11-12', null, '', { title: '스터디', start: '15:00', end: '', toCalendar: false }, 2026, 11);
+  let res = env.ctx.webSaveMemoItem('2026-11-12', 0, '15:00 스터디', { title: '스터디 (장소 변경)', start: '16:00', end: '', toCalendar: false }, 2026, 11);
+  same(res.month.dates[11].items.map((it) => it.text), ['16:00 스터디 (장소 변경)']);
+  res = env.ctx.webSaveMemoItem('2026-11-12', null, '', { title: '회의', start: '16:00', end: '15:00', toCalendar: false }, 2026, 11);
+  assert.strictEqual(res.message, '끝시간 확인');
+  res = env.ctx.webSaveMemoItem('2026-11-12', 0, '예전 글자', { title: 'x', start: '', end: '' }, 2026, 11);
+  assert.ok(/다른 곳에서/.test(res.message), '다른 기기에서 바뀐 경우 막음');
+  res = env.ctx.webDeleteMemoItem('2026-11-12', 0, '16:00 스터디 (장소 변경)', 2026, 11);
+  assert.ok(res.ok);
+  assert.strictEqual(res.month.dates[11].items.length, 0);
+});
+test('토글 켜면 캘린더에도 생성, 일정 칸에는 한 번만', () => {
+  const env = envAt(2026, 11, 11);
+  const res = env.ctx.webSaveMemoItem('2026-11-13', null, '', { title: '발표', start: '14:00', end: '', toCalendar: true }, 2026, 11);
+  assert.ok(/캘린더에도/.test(res.message), res.message);
+  assert.strictEqual(env.events[0].title, '14:00 발표', '시작만 → 종일 + 제목 앞 시간 (기존 규칙)');
+  assert.strictEqual(env.events[0].allDay, true);
+  same(res.month.dates[12].items.map((it) => [it.kind, it.linked]), [['memo', true]]);
+  const b = env.ctx.webBoot();
+  same(b.week.days[4].schedule.map((x) => x.text), ['14:00 발표']);
+  // 캘린더에서 지우면 메모가 다시 보임
+  env.events.length = 0;
+  env.run('syncCalendar_()');
+  same(env.ctx.webBoot().week.days[4].schedule.map((x) => [x.kind, x.text]), [['memo', '14:00 발표']]);
+});
+test('시트 메모 칸을 직접 고쳐도 줄마다 일정 하나, 연동 정보 유지', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSaveMemoItem('2026-11-13', null, '', { title: '발표', start: '14:00', end: '', toCalendar: true }, 2026, 11);
+  const M = env.run('MONTHLY'), ms = env.ss.getSheetByName('먼슬리');
+  ms.getRange(M.memoRow(2), M.dayCol(4)).setValue('14:00 발표\n저녁 약속');
+  edit(env, ms, M.memoRow(2), M.dayCol(4));
+  const rows = evRows(env).filter((r) => r[0] === '2026-11-13' && r[1] === '메모');
+  same(rows, [['2026-11-13', '메모', '저녁 약속', '', ''], ['2026-11-13', '메모', '14:00 발표', 'id', '연동']]);
+});
+test('고정 시간표: 학기 기간에만 매주 일정 칸에 표시', () => {
+  const env = envAt(2026, 11, 11);
+  const res = env.ctx.webSetTimetable({ start: '2026-09-01', end: '2026-11-11', rows: [
+    { day: 1, start: '10:00', end: '11:30', name: '데이터마이닝' }, { day: 3, start: '9:00', end: '', name: '통계학' },
+  ] });
+  same(res.timetable.rows.map((r) => r.name), ['데이터마이닝', '통계학']);
+  same(res.week.days[1].schedule.map((x) => [x.kind, x.text]), [['tt', '10:00-11:30 데이터마이닝']]);
+  same(res.week.days[3].schedule, [], '학기 종료(11/11) 뒤인 목요일은 표시 안 함');
+  assert.ok(res.week.days[1].todos.every((r) => !r[2]), '할 일 줄 차지 안 함');
+  const set = env.ss.getSheetByName('설정'), S = env.run('SETTINGS');
+  same(set.getRange(S.TT_START, 1, 1, 4).getValues()[0], ['화', '10:00', '11:30', '데이터마이닝']);
+  assert.throws(() => env.ctx.webSetTimetable({ rows: [{ day: 0, start: '10:00', end: '09:00', name: 'x' }] }), /끝시간/);
+});
+test('습관 편집: 순서·이름·삭제 → 설정 B6~, 위클리 체크도 따라 이동, 지난 기록 유지', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSetHabit('2026-11-10', 0, true); // 어제 '물 8잔 마시기'
+  env.ctx.webSetHabit('2026-11-11', 2, true); // 오늘 '독서 20분'
+  const b = env.ctx.webSetHabits([
+    { name: '독서 30분', from: 2 }, { name: '물 8잔 마시기', from: 0 }, { name: '명상', from: null },
+  ]);
+  same(b.habits.slice(0, 4), ['독서 30분', '물 8잔 마시기', '명상', '']);
+  const S = env.run('SETTINGS');
+  same(env.ss.getSheetByName('설정').getRange(S.HABIT_START, 2, 3, 1).getValues(), [['독서 30분'], ['물 8잔 마시기'], ['명상']]);
+  assert.strictEqual(b.week.days[2].habits[0], true, '독서 체크가 새 위치로 이동');
+  assert.strictEqual(b.week.days[1].habits[1], true, '물 체크도 이동');
+  const arc = archiveRows(env).filter((r) => r.cat === '습관');
+  assert.ok(arc.find((r) => r.key === '2026-11-10' && r.item === '운동 30분'), '지운 습관의 어제 기록 유지');
+  assert.ok(arc.find((r) => r.key === '2026-11-11' && r.item === '독서 30분' && r.done === true), '오늘은 새 이름으로');
+  assert.throws(() => env.ctx.webSetHabits(Array.from({ length: 11 }, (_, i) => ({ name: 'h' + i, from: null }))), /최대/);
+});
+
 console.log(`\n${passed}개 통과` + (process.exitCode ? ' (실패 있음)' : ''));
