@@ -1,0 +1,7 @@
+# clasp 인증·프로젝트 정보 (개인 정보)
+.clasprc.json
+.clasp.json
+
+# 의존성·OS 파일
+node_modules/
+.DS_Store
