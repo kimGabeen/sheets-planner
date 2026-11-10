@@ -591,7 +591,8 @@ function openDayItems(dayNum, editIndex, message) {
       '<label class="wide">제목<input class="field" name="title" required value="' + esc(memo ? memo.title : '') + '"></label>' +
       '<label>시작 (선택)<input class="field" type="time" name="start" value="' + esc(memo ? memo.start : '') + '"></label>' +
       '<label>끝 (선택)<input class="field" type="time" name="end" value="' + esc(memo ? memo.end : '') + '"></label>' +
-      (memo && memo.linked ? '' : '<label class="switch wide">구글 캘린더에도 추가<input type="checkbox" name="cal"></label>') +
+      (memo && memo.linked ? '<p class="result wide" style="margin:0">구글 캘린더에도 있는 일정이에요 · 수정·삭제하면 캘린더 일정도 같이 바뀌어요</p>'
+        : '<label class="switch wide">구글 캘린더에도 추가<input type="checkbox" name="cal"></label>') +
       '<div class="result wide" id="memo-msg">' + esc(message || '') + '</div>' +
       '<div class="sheet-actions wide">' +
         (memo ? '<button type="button" class="btn-ghost btn-danger" id="memo-del">삭제</button><button type="button" class="btn-ghost" id="memo-new">새로 쓰기</button>' : '') +

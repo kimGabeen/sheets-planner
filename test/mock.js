@@ -106,18 +106,25 @@ function createEnv() {
   const store = (m) => ({ getProperty: (k) => (m.has(k) ? m.get(k) : null), setProperty: (k, v) => m.set(k, String(v)) });
   const triggers = [];
   const events = [];
+  let nextId = 1;
   const cache = new Map();
   const mkEvent = (title, start, end, allDay) => ({
     title, start, end, allDay,
     getTitle() { return this.title; }, isAllDayEvent() { return this.allDay; },
     getStartTime() { return this.start; }, getEndTime() { return this.end; },
     getAllDayStartDate() { return this.start; }, getAllDayEndDate() { return this.end; },
-    getId() { return 'id' + events.indexOf(this); },
+    id: 'id' + (nextId++),
+    getId() { return this.id; },
+    setTitle(t) { this.title = t; return this; },
+    setTime(st, en) { this.start = st; this.end = en; this.allDay = false; return this; },
+    setAllDayDate(d) { this.start = d; this.end = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1); this.allDay = true; return this; },
+    deleteEvent() { events.splice(events.indexOf(this), 1); },
   });
   const sameDay = (a, b) => a.toDateString() === b.toDateString();
   const calendar = {
     getEvents: (s, e) => events.filter((ev) => ev.start < e && ev.end > s),
     getEventsForDay: (d) => events.filter((ev) => sameDay(ev.start, d)),
+    getEventById: (id) => events.find((ev) => ev.id === id) || null,
     createEvent: (t, s, e) => { const ev = mkEvent(t, s, e, false); events.push(ev); return ev; },
     createAllDayEvent: (t, d) => { const ev = mkEvent(t, d, new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), true); events.push(ev); return ev; },
   };

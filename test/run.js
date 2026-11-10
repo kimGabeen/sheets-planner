@@ -370,4 +370,49 @@ test('습관 편집: 순서·이름·삭제 → 설정 B6~, 위클리 체크도 
   assert.throws(() => env.ctx.webSetHabits(Array.from({ length: 11 }, (_, i) => ({ name: 'h' + i, from: null }))), /최대/);
 });
 
+
+test('캘린더에도 만든 일정 수정 → 캘린더 일정도 같은 규칙으로 수정', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSaveMemoItem('2026-11-13', null, '', { title: '발표', start: '14:00', end: '', toCalendar: true }, 2026, 11);
+  const ev = env.events[0];
+  // 시작+끝 → 시간 일정으로
+  let res = env.ctx.webSaveMemoItem('2026-11-13', 0, '14:00 발표', { title: '발표 리허설', start: '15:00', end: '16:00' }, 2026, 11);
+  assert.ok(/캘린더 일정도 수정/.test(res.message), res.message);
+  assert.strictEqual(env.events.length, 1, '새로 만들지 않고 그 일정을 수정');
+  assert.strictEqual(ev.title, '발표 리허설');
+  assert.strictEqual(ev.allDay, false);
+  assert.strictEqual(ev.start.getHours(), 15);
+  same(res.month.dates[12].items.map((it) => [it.text, it.linked]), [['15:00-16:00 발표 리허설', true]]);
+  // 시간 없음 → 다시 종일
+  res = env.ctx.webSaveMemoItem('2026-11-13', 0, '15:00-16:00 발표 리허설', { title: '발표', start: '', end: '' }, 2026, 11);
+  assert.strictEqual(ev.allDay, true);
+  assert.strictEqual(ev.title, '발표');
+  same(env.ctx.webBoot().week.days[4].schedule.map((x) => x.text), ['발표'], '일정 칸에는 한 번만');
+  // 끝시간 오류면 캘린더도 그대로
+  res = env.ctx.webSaveMemoItem('2026-11-13', 0, '발표', { title: '발표', start: '16:00', end: '15:00' }, 2026, 11);
+  assert.strictEqual(res.message, '끝시간 확인');
+  assert.strictEqual(ev.allDay, true);
+});
+test('캘린더에도 만든 일정 삭제 → 캘린더 일정도 삭제', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSaveMemoItem('2026-11-13', null, '', { title: '발표', start: '14:00', end: '15:00', toCalendar: true }, 2026, 11);
+  env.ctx.webSaveMemoItem('2026-11-13', null, '', { title: '친구 생일', start: '', end: '', toCalendar: true }, 2026, 11);
+  assert.strictEqual(env.events.length, 2);
+  const res = env.ctx.webDeleteMemoItem('2026-11-13', 1, '14:00-15:00 발표', 2026, 11);
+  assert.ok(/캘린더 일정도 삭제/.test(res.message), res.message);
+  same(env.events.map((e) => e.title), ['친구 생일'], 'ID로 찾은 그 일정만 삭제');
+  same(res.month.dates[12].items.map((it) => it.text), ['친구 생일']);
+});
+test('구글 캘린더에서 먼저 지운 일정은 앱에만 저장·삭제', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSaveMemoItem('2026-11-13', null, '', { title: '발표', start: '', end: '', toCalendar: true }, 2026, 11);
+  env.events.length = 0; // 캘린더에서 직접 삭제 (아직 동기화 전)
+  let res = env.ctx.webSaveMemoItem('2026-11-13', 0, '발표', { title: '발표 (취소?)', start: '', end: '' }, 2026, 11);
+  assert.ok(/이미 지워진/.test(res.message), res.message);
+  assert.strictEqual(env.events.length, 0, '다시 만들지 않음');
+  same(res.month.dates[12].items.map((it) => [it.text, it.linked]), [['발표 (취소?)', false]]);
+  res = env.ctx.webDeleteMemoItem('2026-11-13', 0, '발표 (취소?)', 2026, 11);
+  assert.ok(res.ok);
+});
+
 console.log(`\n${passed}개 통과` + (process.exitCode ? ' (실패 있음)' : ''));

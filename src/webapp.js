@@ -334,6 +334,7 @@ function checkMemo_(rows, date, index, original) {
  * 먼슬리 일정 저장 (새로 추가: index = null)
  * item = {title, start, end, toCalendar}. 먼슬리 메모(_일정 메모)에 저장 → 위클리·오늘 "일정"에 자동 표시
  * toCalendar면 기존 캘린더 추가 규칙대로 구글 캘린더에도 생성 (일정 칸에는 한 번만 보이게 연동 표시)
+ * 이미 캘린더에도 있는 일정을 수정하면 저장해 둔 이벤트 ID로 찾아 캘린더 일정도 같은 규칙으로 수정
  * 반환 {ok, message, month}
  */
 function webSaveMemoItem(key, index, original, item, y, m) {
@@ -351,9 +352,16 @@ function webSaveMemoItem(key, index, original, item, y, m) {
 
       let eventId = '', msg = '저장됨 ✓';
       if (index !== null && index !== undefined) eventId = checkMemo_(readEvents_(), date, index, original)[4];
+      // 캘린더에도 만든 일정이면 저장해 둔 ID로 찾아 같이 수정
+      if (eventId) {
+        const up = updateCalendarEvent_(eventId, date, item.start, item.end, title);
+        if (up.ok) msg = '저장됨 ✓ · 구글 캘린더 일정도 수정';
+        else if (!up.found) { eventId = ''; msg = '저장됨 ✓ · 구글 캘린더에서 이미 지워진 일정이라 앱에만 저장했어요'; }
+        else throw new Error(up.message);
+      }
       if (item.toCalendar && !eventId) {
         const cal = createCalendarEvent_(date, item.start, item.end, title); // 안에서 캘린더 다시 불러옴
-        if (cal.ok) { eventId = cal.id; msg = '저장됨 ✓ · 구글 캘린더에도 추가'; }
+        if (cal.ok) { eventId = cal.id; msg += ' · 구글 캘린더에도 추가'; }
         else msg = '저장됨 ✓ · 캘린더: ' + cal.message;
       }
 
@@ -375,17 +383,20 @@ function webSaveMemoItem(key, index, original, item, y, m) {
   });
 }
 
-/** 먼슬리 일정 삭제 (구글 캘린더에 만든 일정은 그대로 둠) */
+/** 먼슬리 일정 삭제 (캘린더에도 만든 일정이면 구글 캘린더에서도 삭제) */
 function webDeleteMemoItem(key, index, original, y, m) {
   return withLock_(function () {
     const date = dateOnly_(key);
     let res;
     try {
+      const id = checkMemo_(readEvents_(), date, index, original)[4];
+      // 캘린더에도 만든 일정이면 저장해 둔 ID로 찾아 같이 삭제 (그 뒤 최신 목록에서 메모 삭제)
+      const gone = id ? deleteCalendarEvent_(id) : false;
       const rows = readEvents_();
       const old = checkMemo_(rows, date, index, original);
       writeEvents_(rows.filter(function (r) { return r !== old; }));
       refreshMonthMemos_();
-      res = { ok: true, message: '삭제됨' + (old[4] ? ' (구글 캘린더 일정은 그대로예요)' : '') };
+      res = { ok: true, message: '삭제됨' + (gone ? ' · 구글 캘린더 일정도 삭제' : id ? ' (구글 캘린더에서는 이미 지워져 있었어요)' : '') };
     } catch (err) {
       res = { ok: false, message: '오류: ' + err.message };
     }

@@ -211,7 +211,12 @@ function hasDuplicate_(cal, date, title, start, end) {
  * 규칙: 시작+끝 → 그 시간대 / 시작만 → 종일 + 제목 앞에 시간 / 둘 다 없음 → 종일
  * 반환 {ok, message, id}. 입력이 잘못되면 Error를 던짐
  */
-function createCalendarEvent_(dateValue, startText, endText, titleText) {
+/**
+ * 입력 → 캘린더 일정 모양 (만들기·수정 공용 규칙)
+ * 시작+끝 → 그 시간대 / 시작만 → 종일 + 제목 앞에 시간 / 둘 다 없음 → 종일
+ * 반환 {date, st, en, allDay, start, end, finalTitle, error}. 입력이 잘못되면 Error
+ */
+function eventShape_(dateValue, startText, endText, titleText) {
   const date = dateOnly_(dateValue) || today_();
   const title = String(titleText || '').trim();
   if (!title) throw new Error('제목을 입력해 주세요');
@@ -221,9 +226,61 @@ function createCalendarEvent_(dateValue, startText, endText, titleText) {
   const allDay = !(st && en);
   const start = allDay ? null : atTime_(date, st);
   const end = allDay ? null : atTime_(date, en);
-  if (!allDay && end <= start) return { ok: false, message: '끝시간 확인' };
   const hhmm = function (t) { return ('0' + t.h).slice(-2) + ':' + ('0' + t.m).slice(-2); };
-  const finalTitle = st && !en ? hhmm(st) + ' ' + title : title;
+  return {
+    date: date, title: title, st: st, en: en, allDay: allDay, start: start, end: end,
+    finalTitle: st && !en ? hhmm(st) + ' ' + title : title,
+    error: !allDay && end <= start ? '끝시간 확인' : '',
+  };
+}
+
+/** 저장해 둔 ID로 내 캘린더 일정 찾기 (지워졌으면 null) */
+function findCalendarEvent_(id) {
+  if (!id) return null;
+  try {
+    return calendar_().getEventById(id) || null;
+  } catch (err) {
+    return null;
+  }
+}
+
+/**
+ * 캘린더에도 만든 일정 수정 (ID로 찾아서 제목·날짜·시간을 같은 규칙으로 바꿈)
+ * 반환 {ok, found, message}. 캘린더에서 이미 지워졌으면 found=false
+ */
+function updateCalendarEvent_(id, dateValue, startText, endText, titleText) {
+  const shape = eventShape_(dateValue, startText, endText, titleText);
+  if (shape.error) return { ok: false, found: true, message: shape.error };
+  const ev = findCalendarEvent_(id);
+  if (!ev) {
+    syncCalendar_(); // 남아 있던 옛 캘린더 줄 정리
+    return { ok: false, found: false, message: '구글 캘린더에서 이미 지워진 일정이에요' };
+  }
+  ev.setTitle(shape.finalTitle);
+  if (shape.allDay) ev.setAllDayDate(shape.date); // 시간 있던 일정도 종일로 바뀜
+  else ev.setTime(shape.start, shape.end); // 종일이던 일정도 시간 일정으로 바뀜
+  syncCalendar_();
+  return { ok: true, found: true, message: '구글 캘린더 일정도 수정' };
+}
+
+/** 캘린더에도 만든 일정 삭제 → 찾아서 지웠으면 true */
+function deleteCalendarEvent_(id) {
+  const ev = findCalendarEvent_(id);
+  if (!ev) {
+    syncCalendar_(); // 남아 있던 옛 캘린더 줄 정리
+    return false;
+  }
+  ev.deleteEvent();
+  syncCalendar_();
+  return true;
+}
+
+function createCalendarEvent_(dateValue, startText, endText, titleText) {
+  const shape = eventShape_(dateValue, startText, endText, titleText);
+  if (shape.error) return { ok: false, message: shape.error };
+  const date = shape.date, title = shape.title, st = shape.st, en = shape.en;
+  const allDay = shape.allDay, start = shape.start, end = shape.end, finalTitle = shape.finalTitle;
+  const hhmm = function (t) { return ('0' + t.h).slice(-2) + ':' + ('0' + t.m).slice(-2); };
 
   // 중복 방지 ① 최근 2분 안에 같은 요청 ② 캘린더에 같은 일정 존재
   const key = 'add|' + dateKey_(date) + '|' + (st ? hhmm(st) : '') + '|' + (en ? hhmm(en) : '') + '|' + title;
