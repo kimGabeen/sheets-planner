@@ -1,0 +1,9 @@
+{
+  "name": "sheets-planner",
+  "private": true,
+  "description": "구글 시트 + 구글 캘린더 개인 플래너 (Google Apps Script)",
+  "scripts": {
+    "test": "TZ=Asia/Seoul node test/run.js",
+    "push": "clasp push --force"
+  }
+}
