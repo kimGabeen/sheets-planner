@@ -38,6 +38,14 @@ function styleSettings_(sh, theme) {
   sh.getRange(S.THEME.row, 3).setValue('← #2E7D32 같은 색 코드를 넣으면 전체 색이 바뀌어요')
     .setFontColor(CONFIG.COLORS.SUB).setFontSize(9);
 
+  // 못 한 일 자동 넘기기 (처음엔 켜짐)
+  const carry = sh.getRange(S.CARRY.row, S.CARRY.col);
+  if (!carry.getDataValidation()) carry.setValue(true);
+  sh.getRange(S.CARRY.row, 1).setValue('못 한 일 자동 넘기기').setFontWeight('bold');
+  checkbox_(carry);
+  sh.getRange(S.CARRY.row, 3).setValue('← 켜면 매일 0시에 전날 미완료를 다음 날로 넘겨요')
+    .setFontColor(CONFIG.COLORS.SUB).setFontSize(9);
+
   styleHeader_(sh.getRange(S.HABIT_HEADER, 1, 1, 3).merge()
     .setValue('습관 목록 (최대 ' + CONFIG.HABIT_COUNT + '개) — 위클리·오늘·먼슬리에 자동 반영'), theme);
   for (let i = 0; i < CONFIG.HABIT_COUNT; i++) {
@@ -51,7 +59,7 @@ function styleSettings_(sh, theme) {
     .setFontSize(9);
 
   styleHeader_(sh.getRange(S.STATUS_HEADER, 1, 1, 3).merge().setValue('자동 실행 상태 (읽기 전용)'), theme);
-  const labels = { setup: '처음 설정', save: '기록 저장', sync: '캘린더 불러오기', week: '새 주 시작', error: '최근 오류' };
+  const labels = { setup: '처음 설정', save: '기록 저장', sync: '캘린더 불러오기', week: '새 주 시작', carry: '못 한 일 넘기기', error: '최근 오류' };
   Object.keys(S.STATUS).forEach(function (k) {
     sh.getRange(S.STATUS[k], 1).setValue(labels[k]).setFontColor(CONFIG.COLORS.SUB);
     sh.getRange(S.STATUS[k], 2, 1, 2).merge().setFontColor(CONFIG.COLORS.SUB).setFontSize(9);

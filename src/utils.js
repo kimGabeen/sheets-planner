@@ -138,7 +138,7 @@ function checkbox_(range) {
 
 /** 입력칸 밑줄 (테두리 최소화) */
 function underline_(range) {
-  range.setBorder(null, null, true, null, null, null, CONFIG.COLORS.LINE,
+  return range.setBorder(null, null, true, null, null, null, CONFIG.COLORS.LINE,
     SpreadsheetApp.BorderStyle.SOLID);
 }
 

@@ -106,7 +106,7 @@ function buildMonthlyPanel_(sh, theme) {
   }
 
   styleHeader_(sh.getRange(L.ADD_HEADER, P, 1, W).merge().setValue('새 일정 추가 (구글 캘린더)'), theme);
-  const labels = { date: '날짜', start: '시작', end: '끝(비우면 종일)', title: '제목', check: '추가' };
+  const labels = { date: '날짜', start: '시작', end: '끝(선택)', title: '제목', check: '추가' };
   Object.keys(L.ADD).forEach(function (k) {
     sh.getRange(L.ADD_LABEL, L.ADD[k], 1, L.ADD_SPAN[k]).merge().setValue(labels[k])
       .setFontColor(C.SUB).setFontSize(8).setHorizontalAlignment('center');
@@ -116,7 +116,8 @@ function buildMonthlyPanel_(sh, theme) {
   dateInput_(sh.getRange(L.ADD_ROW, L.ADD.date, 1, L.ADD_SPAN.date));
   sh.getRange(L.ADD_ROW, L.ADD.start, 1, 4).setNumberFormat('HH:mm');
   checkbox_(sh.getRange(L.ADD_ROW, L.ADD.check));
-  sh.getRange(L.ADD_RESULT, P, 1, W).merge().setFontColor(C.SUB).setFontSize(9);
+  sh.getRange(L.ADD_RESULT, P, 1, W).merge().setFontColor(C.SUB).setFontSize(9)
+    .setNote('시작+끝: 그 시간대 일정 / 시작만: 종일 + 제목 앞에 시간 / 둘 다 없음: 종일');
   sh.setRowHeight(L.ADD_ROW, 30);
 
   checkbox_(sh.getRange(L.SYNC_ROW, P));
@@ -314,7 +315,7 @@ function onMonthlyEdit_(e) {
     });
   }
   if (justChecked_(e, L.SYNC_ROW, L.PANEL_COL)) {
-    return runAction_(sh, { row: L.SYNC_ROW, col: L.PANEL_COL }, L.PANEL_COL + 5, function () {
+    return runAction_(sh, { row: L.SYNC_ROW, col: L.PANEL_COL }, { row: L.SYNC_ROW, col: L.PANEL_COL + 5 }, function () {
       return '불러옴 ✓ ' + syncCalendar_() + '개';
     });
   }

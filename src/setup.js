@@ -33,6 +33,10 @@ function setup() {
   loadMonthGoals_();
   initLastWeekSelect_();
 
+  // 첫날에는 어제 미완료를 넘기지 않도록 표시만 해 둠
+  const props = PropertiesService.getDocumentProperties();
+  if (!props.getProperty('CARRY_DONE')) props.setProperty('CARRY_DONE', dateKey_(addDays_(today_(), -1)));
+
   // 5) 트리거 (중복 없이)
   installTriggers_();
   setStatus_('setup', '✓ 완료 (트리거 ' + ScriptApp.getProjectTriggers().length + '개)');
@@ -41,12 +45,15 @@ function setup() {
 
 /** 화면 시트 전부 다시 그리기 (테마 바꿀 때도 사용) */
 function buildAllLayouts_(theme) {
+  const migrating = needsMigration_();
   styleSettings_(sheet_(CONFIG.SHEETS.SETTINGS), theme);
   buildArchive_(theme);
-  buildWeekly_(theme);
+  buildWeekly_(theme); // 예전 레이아웃이면 입력값을 새 위치로 옮김
   buildToday_(theme);
   buildMonthly_(theme);
   buildLastWeek_(theme);
+  PropertiesService.getDocumentProperties().setProperty('LAYOUT_VERSION', CONFIG.LAYOUT_VERSION);
+  if (migrating) refreshToday_(); // 오늘 시트는 위클리에서 다시 채움
 }
 
 /** 비어 있는 칸에만 기본값 (주 시작 = 이번 주 월요일, 먼슬리 = 이번 달) */

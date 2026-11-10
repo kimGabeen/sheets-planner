@@ -72,9 +72,12 @@ function buildDayRows_(date) {
   const wk = weekKey_(date);
   const rows = [];
 
-  sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 2).getValues().forEach(function (r) {
-    const text = String(r[1]).trim();
-    if (text) rows.push([date, C.TODO, text, r[0] === true, '', wk]);
+  // 할 일: "미완 →"(넘겨진 원래 일)은 FALSE + 값 "이월", 표시 기호는 떼고 저장
+  sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 3).getValues().forEach(function (r) {
+    const raw = String(r[2]).trim();
+    if (!raw) return;
+    const missed = isMissed_(raw);
+    rows.push([date, C.TODO, stripCarry_(raw), missed ? false : r[0] === true, missed ? CONFIG.CARRY.VALUE : '', wk]);
   });
 
   const checks = sh.getRange(L.HABIT_START, L.HABIT_DAY_COL + d, CONFIG.HABIT_COUNT, 1).getValues();

@@ -57,6 +57,16 @@ const CONFIG = {
   },
   CALENDAR_MONTHS_AHEAD: 1, // 이번 달 + 몇 달 뒤까지 불러올지
 
+  // 못 한 일 자동 넘기기 표시
+  CARRY: {
+    MISSED: '미완 → ', // 전날 칸에 남는 원래 할 일 앞
+    CARRIED: '↪ ', // 다음 날로 복사된 할 일 앞
+    VALUE: '이월', // 기록 시트 "값" 칸
+  },
+
+  // 시트 레이아웃 버전 (레이아웃이 바뀌면 올리고, 예전 입력값을 새 위치로 옮김)
+  LAYOUT_VERSION: '2',
+
   // 색
   COLORS: {
     TEXT: '#212121',
@@ -73,7 +83,8 @@ const CONFIG = {
     TODAY_ROW: 36,
     LABEL_COL: 70,
     CHECK_COL: 36,
-    TEXT_COL: 115,
+    TIME_COL: 46, // 할 일 시간 칸
+    TEXT_COL: 110,
     GAP_COL: 16,
     HABIT_NAME_COL: 120,
     HABIT_DAY_COL: 34,
@@ -82,29 +93,35 @@ const CONFIG = {
   },
 };
 
-/** 위클리 시트 레이아웃 */
+/** 위클리 시트 레이아웃 (요일 하나 = 체크 | 시간 | 내용 3열) */
 const WEEKLY = (function () {
   const L = {
+    DAY_SPAN: 3,
     TITLE: { row: 1, col: 1 },
-    WEEK_START: { row: 1, col: 4 }, // 주 시작 날짜 입력칸 (D1)
+    WEEK_START: { row: 1, col: 5 }, // 주 시작 날짜 입력칸 (E1)
     ACTION_SAVE: { row: 2, col: 1 }, // 지금 저장 체크박스
     ACTION_SYNC: { row: 3, col: 1 }, // 캘린더 새로고침 체크박스
-    ACTION_RESULT_COL: 4,
-    INFO_LABEL_COL: 7,
-    INFO_VALUE_COL: 8,
-    INFO_VALUE_END: 15,
+    ACTION_RESULT_COL: 5,
+    INFO_LABEL_COL: 8,
+    INFO_VALUE_COL: 10,
     GOAL_ROW: 1,
     REWARD_ROW: 2,
     AFFIRM_ROW: 3,
     MUST_HEADER: 5,
     MUST_START: 6,
+    MUST_WIDTH: 7, // 꼭 끝낼 일 상자 너비 (A~G)
     DAY_HEADER: 13,
-    HABIT_NAME_COL: 17,
-    HABIT_DAY_COL: 18,
-    HABIT_BAR_COL: 25,
-    HABIT_PCT_COL: 26,
-    CHART_DATA_COL: 28, // 숨김 차트 데이터
   };
+  L.checkCol = function (d) { return 2 + L.DAY_SPAN * d; }; // 요일 d(0=월)의 체크박스 열
+  L.timeCol = function (d) { return 3 + L.DAY_SPAN * d; }; // 시간 열
+  L.textCol = function (d) { return 4 + L.DAY_SPAN * d; }; // 내용 열
+  L.LAST_DAY_COL = L.textCol(6);
+  L.INFO_VALUE_END = L.LAST_DAY_COL;
+  L.HABIT_NAME_COL = L.LAST_DAY_COL + 2;
+  L.HABIT_DAY_COL = L.HABIT_NAME_COL + 1;
+  L.HABIT_BAR_COL = L.HABIT_DAY_COL + 7;
+  L.HABIT_PCT_COL = L.HABIT_BAR_COL + 1;
+  L.CHART_DATA_COL = L.HABIT_PCT_COL + 2; // 숨김 차트 데이터
   L.MUST_PROGRESS = L.MUST_START + CONFIG.MUST_COUNT;
   L.OVERALL = { row: L.DAY_HEADER - 1, col: L.HABIT_NAME_COL };
   L.RATE = L.DAY_HEADER + 1;
@@ -115,10 +132,17 @@ const WEEKLY = (function () {
   L.MOOD_MEMO = L.MOOD + 1;
   L.HABIT_START = L.DAY_HEADER + 1;
   L.LAST_COL = L.CHART_DATA_COL + 2;
-  L.checkCol = function (d) { return 2 + 2 * d; }; // 요일 d(0=월)의 체크박스 열
-  L.textCol = function (d) { return 3 + 2 * d; }; // 요일 d의 글자 열
   return L;
 })();
+
+/** 예전(버전 1) 위클리 위치: 요일 하나 = 체크 | 내용 2열 → 마이그레이션에서만 사용 */
+const WEEKLY_V1 = {
+  WEEK_START: { row: 1, col: 4 },
+  INFO_VALUE_COL: 8,
+  HABIT_DAY_COL: 18,
+  checkCol: function (d) { return 2 + 2 * d; },
+  textCol: function (d) { return 3 + 2 * d; },
+};
 
 /** 먼슬리 시트 레이아웃 (34px 격자) */
 const MONTHLY = (function () {
@@ -159,7 +183,7 @@ const MONTHLY = (function () {
   return L;
 })();
 
-/** 오늘 시트 레이아웃 (폰 세로, 3열) */
+/** 오늘 시트 레이아웃 (폰 세로, 3열: 체크 | 시간 | 내용) */
 const TODAY = (function () {
   let r = 1;
   const L = { DATE_ROW: r };
@@ -172,8 +196,12 @@ const TODAY = (function () {
   L.ADD_HEADER = r;
   L.ADD = { date: r + 1, start: r + 2, end: r + 3, title: r + 4, check: r + 5, result: r + 6 };
   r += 8;
-  L.TOOLS_HEADER = r; L.SYNC_ROW = r + 1; L.SAVE_ROW = r + 2;
-  L.LAST_ROW = r + 3;
+  L.TOOLS_HEADER = r;
+  L.SYNC_ROW = r + 1; L.SYNC_RESULT = r + 2;
+  L.SAVE_ROW = r + 3; L.SAVE_RESULT = r + 4;
+  r += 6;
+  L.OVERFLOW_HEADER = r; L.OVERFLOW_START = r + 1; // 맨 아래: 빈 줄이 없어 못 넘어간 일
+  L.LAST_ROW = L.OVERFLOW_START + CONFIG.TODO_ROWS - 1;
   return L;
 })();
 
@@ -189,6 +217,8 @@ const LASTWEEK = (function () {
     HABIT_DAY_COL: 18,
     HABIT_PCT_COL: 25,
   };
+  L.checkCol = function (d) { return 2 + 2 * d; }; // 지난 주 보기는 ✓ | 내용 2열
+  L.textCol = function (d) { return 3 + 2 * d; };
   L.DAY_HEADER = L.MUST_START + CONFIG.MUST_COUNT + 1;
   L.RATE = L.DAY_HEADER + 1;
   L.TODO_START = L.RATE + 1;
@@ -203,9 +233,10 @@ const LASTWEEK = (function () {
 /** 설정 시트 레이아웃 */
 const SETTINGS = {
   THEME: { row: 3, col: 2 },
+  CARRY: { row: 4, col: 2 }, // 못 한 일 자동 넘기기 켜기/끄기
   HABIT_HEADER: 5,
   HABIT_START: 6,
   PRESET_ROW: 17,
   STATUS_HEADER: 19,
-  STATUS: { setup: 20, save: 21, sync: 22, week: 23, error: 24 },
+  STATUS: { setup: 20, save: 21, sync: 22, week: 23, carry: 24, error: 25 },
 };

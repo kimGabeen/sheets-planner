@@ -46,8 +46,7 @@ function handleEdit(e) {
 /** [1시간마다] 캘린더 불러오기 + 날짜 넘어갔는지 확인 */
 function syncCalendarHourly() {
   runSafely_('캘린더 불러오기', function () {
-    ensureCurrentWeek_();
-    if (String(todaySheetDate_()) !== String(today_())) refreshToday_();
+    dailyRollover_();
     syncCalendar_();
   });
 }
@@ -57,12 +56,23 @@ function nightlyArchive() {
   runSafely_('밤 저장', function () { saveAll_(); });
 }
 
-/** [매일 0시] 월요일이면 새 주 시작, 오늘 시트를 새 날짜로 */
+/** [매일 0시] 못 한 일 넘기기 → (월요일이면) 새 주 시작 → 오늘 시트를 새 날짜로 */
 function midnightJob() {
   runSafely_('자정 작업', function () {
+    carryOver_();
     ensureCurrentWeek_();
     refreshToday_();
   });
+}
+
+/**
+ * 날짜가 바뀐 뒤 할 일 (자정 트리거가 늦거나 빠져도 1시간마다 다시 확인)
+ * 넘기기는 하루 한 번만 실행되고, 새 주 시작보다 먼저 처리됨
+ */
+function dailyRollover_() {
+  carryOver_();
+  ensureCurrentWeek_();
+  if (String(todaySheetDate_()) !== String(today_())) refreshToday_();
 }
 
 /** 위클리가 지난 주에 머물러 있으면 새 주 시작 (트리거가 늦거나 빠져도 복구) */

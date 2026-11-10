@@ -7,7 +7,7 @@
 /** 지난 주 보기 시트 그리기 */
 function buildLastWeek_(theme) {
   const sh = ensureSheet_(CONFIG.SHEETS.LASTWEEK);
-  const L = LASTWEEK, W = WEEKLY, C = CONFIG.COLORS, Z = CONFIG.SIZE, CAT = CONFIG.CATEGORY;
+  const L = LASTWEEK, C = CONFIG.COLORS, Z = CONFIG.SIZE, CAT = CONFIG.CATEGORY;
   const arc = CONFIG.SHEETS.ARCHIVE;
   const A = colRef_(arc, 1), B = colRef_(arc, 2), I = colRef_(arc, 3), D = colRef_(arc, 4),
     E = colRef_(arc, 5), F = colRef_(arc, 6);
@@ -20,7 +20,7 @@ function buildLastWeek_(theme) {
   // 열 너비 (위클리와 같게)
   sh.setColumnWidth(1, Z.LABEL_COL);
   for (let d = 0; d < 7; d++) {
-    sh.setColumnWidth(W.checkCol(d), Z.CHECK_COL).setColumnWidth(W.textCol(d), Z.TEXT_COL);
+    sh.setColumnWidth(L.checkCol(d), Z.CHECK_COL).setColumnWidth(L.textCol(d), Z.TEXT_COL);
   }
   sh.setColumnWidth(L.HABIT_NAME_COL - 1, Z.GAP_COL).setColumnWidth(L.HABIT_NAME_COL, Z.HABIT_NAME_COL);
   sh.setColumnWidths(L.HABIT_DAY_COL, 7, Z.HABIT_DAY_COL);
@@ -57,7 +57,7 @@ function buildLastWeek_(theme) {
     .forEach(function (a) { sh.getRange(a[0], 1).setValue(a[1]).setFontColor(C.SUB).setFontSize(9); });
   const emoji = CONFIG.MOOD_EMOJI.map(function (x) { return '"' + x + '"'; }).join(',');
   for (let d = 0; d < 7; d++) {
-    const c = W.checkCol(d), t = W.textCol(d);
+    const c = L.checkCol(d), t = L.textCol(d);
     const date = colLetter_(c) + '$' + L.DAY_HEADER;
     const mk = a1_(L.TODO_START, c) + ':' + a1_(L.COUNT - 1, c);
     const tx = a1_(L.TODO_START, t) + ':' + a1_(L.COUNT - 1, t);
@@ -70,8 +70,9 @@ function buildLastWeek_(theme) {
       ',p,IF(tot=0,0,done/tot),IF(tot=0,"",CHOOSE(ROUND(p*4)+1,"○","◔","◑","◕","●")&"  "&TEXT(p,"0%")))')
       .setHorizontalAlignment('center').setFontSize(13).setFontColor(theme).setFontWeight('bold');
     // 할 일: ✓/· 와 내용을 2열로 펼침
+    // ✓ 완료 / ↪ 다음 날로 넘김(이월) / · 못 함
     sh.getRange(L.TODO_START, c).setFormula('=IFERROR(ARRAY_CONSTRAIN(ARRAYFORMULA(FILTER({IF(' + D +
-      ',"✓","·"),' + I + '},' + A + '=' + date + ',' + B + '="' + CAT.TODO + '")),' + CONFIG.TODO_ROWS + ',2),"")');
+      ',"✓",IF(' + E + '="' + CONFIG.CARRY.VALUE + '","↪","·")),' + I + '},' + A + '=' + date + ',' + B + '="' + CAT.TODO + '")),' + CONFIG.TODO_ROWS + ',2),"")');
     sh.getRange(L.TODO_START, c, CONFIG.TODO_ROWS, 1).setHorizontalAlignment('center').setFontColor(theme);
     underline_(sh.getRange(L.TODO_START, c, CONFIG.TODO_ROWS, 2));
     sh.getRange(L.COUNT, c, 1, 2).merge().setFormula('=IF(' + tot + '=0,"",' + done + '&" 완료 · "&(' + tot +
@@ -86,7 +87,7 @@ function buildLastWeek_(theme) {
   // 습관 결과
   styleHeader_(sh.getRange(L.DAY_HEADER, L.HABIT_NAME_COL).setValue('습관'), theme);
   for (let d = 0; d < 7; d++) {
-    styleHeader_(sh.getRange(L.DAY_HEADER, L.HABIT_DAY_COL + d).setFormula('=' + a1_(L.DAY_HEADER, W.checkCol(d)))
+    styleHeader_(sh.getRange(L.DAY_HEADER, L.HABIT_DAY_COL + d).setFormula('=' + a1_(L.DAY_HEADER, L.checkCol(d)))
       .setNumberFormat('ddd').setHorizontalAlignment('center'), theme);
   }
   styleHeader_(sh.getRange(L.DAY_HEADER, L.HABIT_PCT_COL).setValue('%').setHorizontalAlignment('center'), theme);
@@ -107,7 +108,7 @@ function buildLastWeek_(theme) {
   }
 
   // 조건부 서식: 완료 항목 취소선, 기분 배경
-  const first = W.checkCol(0), last = W.textCol(6);
+  const first = L.checkCol(0), last = L.textCol(6);
   const tl = a1_(L.TODO_START, first), left = a1_(L.TODO_START, first - 1);
   const idx = 'COLUMN()-1-N(ISODD(COLUMN()))';
   const moodRow = '$' + colLetter_(first) + '$' + L.MOOD + ':$' + colLetter_(last) + '$' + L.MOOD;
