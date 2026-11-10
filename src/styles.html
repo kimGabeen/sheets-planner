@@ -253,4 +253,25 @@
   .tt-day { margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
   .sheet-actions { display: flex; gap: 8px; margin-top: 14px; }
   .sheet-actions .btn { flex: 1; }
+
+  /* 일요일·공휴일 */
+  .red { color: #D0453A !important; }
+  .holiday { font-size: 11px; color: #D0453A; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hero .holiday { font-size: 13px; margin-top: 2px; }
+  .cal .holiday { font-size: 10px; }
+
+  /* 일정 목록: 누르면 수정 */
+  .sched-item { width: 100%; text-align: left; font-size: 15px; min-height: 40px; padding: 8px 0; }
+  .sched.tap li { padding: 0; }
+  .sched li.tt { color: var(--text); }
+
+  /* 새로고침 중: 아이콘만 살짝 돎 */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #refresh.spin svg { animation: spin 1s linear infinite; }
+
+  /* 입력창 메시지·삭제 확인 */
+  .result.bad { color: #8A3B2E; }
+  .confirm { font-size: 15px; font-weight: 700; color: #8A3B2E; display: flex; align-items: center; }
+  .btn-del { background: #8A3B2E; flex: 0 0 auto !important; }
+  .sheet-actions .grow { flex: 1; }
 </style>
