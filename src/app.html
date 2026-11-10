@@ -6,6 +6,7 @@
  * - 시트에서 바꾼 내용은 화면으로 돌아올 때·1분마다 다시 불러와 반영
  */
 const TODO_ROWS = 10;
+const HABIT_MAX = 10;
 const SLOT_MIN = 10;
 const MOOD_COLORS = ['', '#D9D6CE', '#D9D6CE', '#B9D3C7', '#7FA897', '#2F5D50'];
 const WEEKDAYS = ['월', '화', '수', '목', '금', '토', '일'];
@@ -13,10 +14,13 @@ const MISSED = '미완 →';
 const TITLES = { today: '오늘', week: '위클리', month: '먼슬리', timeline: '타임라인' };
 
 const S = {
-  boot: null, tab: readTab(), lastLoad: 0, pending: 0,
+  boot: null, tab: readPref('tab', 'today'), lastLoad: 0, pending: 0,
+  detail: null, // 위클리에서 연 요일 상세 (날짜 키)
+  edit: null, // 편집 중인 할 일 {key, i}
+  weekGrid: readPref('weekGrid', '') === '1', // 위클리 7칸 한 줄 보기
   ym: null, month: null, selDay: null,
   tl: { key: null, slots: null, brush: null, painting: false, mode: null, timer: null },
-  focusAdd: null, addResult: '',
+  addResult: '',
 };
 
 /* ---------- 도우미 ---------- */
@@ -27,10 +31,15 @@ const pad = (n) => String(n).padStart(2, '0');
 const keyOf = (d) => d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
 const parseKey = (k) => { const p = k.split('-').map(Number); return new Date(p[0], p[1] - 1, p[2]); };
 const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-const isEditing = () => { const a = document.activeElement; return a && a.tagName === 'INPUT' && $('#view').contains(a); };
+const errText = (err) => (err && err.message) || String(err);
+const sheetOpen = () => !$('#sheet-bg').hidden;
+const isEditing = () => {
+  const a = document.activeElement;
+  return !!S.edit || sheetOpen() || (a && /INPUT|TEXTAREA|SELECT/.test(a.tagName) && $('#view').contains(a));
+};
 
-function readTab() { try { return localStorage.getItem('tab') || 'today'; } catch (e) { return 'today'; } }
-function writeTab(t) { try { localStorage.setItem('tab', t); } catch (e) { /* 저장 안 돼도 동작 */ } }
+function readPref(k, d) { try { return localStorage.getItem(k) || d; } catch (e) { return d; } }
+function writePref(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* 저장 안 돼도 동작 */ } }
 
 /** 시간 글자 → 'HH:mm' (아니면 '') — 서버 normTime_과 같은 규칙 */
 function normTime(text) {
@@ -57,6 +66,11 @@ function todoRate(todos) {
   return { done, total: filled.length, pct: filled.length ? Math.round((done / filled.length) * 100) : 0 };
 }
 
+function dayLabel(key) {
+  const d = parseKey(key);
+  return (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' + WEEKDAYS[(d.getDay() + 6) % 7] + '요일';
+}
+
 /* ---------- 서버 호출 ---------- */
 function call(fn, ...args) {
   return new Promise((resolve, reject) => {
@@ -68,7 +82,7 @@ function call(fn, ...args) {
 function save(fn, ...args) {
   S.pending++; showSaving();
   return call(fn, ...args).then((r) => r).catch((err) => {
-    notice('저장하지 못했어요 · ' + ((err && err.message) || err), true);
+    notice('저장하지 못했어요 · ' + errText(err), true);
     reload(false);
     return null;
   }).finally(() => { S.pending--; showSaving(); });
@@ -93,25 +107,33 @@ function reload(refresh) {
     if (!isEditing()) render();
     if (S.tab === 'month') loadMonth();
     return b;
-  }).catch((err) => {
-    notice('불러오지 못했어요 · ' + ((err && err.message) || err), true);
-  });
+  }).catch((err) => notice('불러오지 못했어요 · ' + errText(err), true));
+}
+
+/* ---------- 아래에서 올라오는 입력창 ---------- */
+function openSheet(html, mount) {
+  $('#sheet').innerHTML = html;
+  $('#sheet-bg').hidden = false;
+  if (mount) mount($('#sheet'));
+}
+function closeSheet() {
+  $('#sheet-bg').hidden = true;
+  $('#sheet').innerHTML = '';
 }
 
 /* ---------- 공통 렌더 ---------- */
 function render() {
-  $('#title').textContent = TITLES[S.tab];
+  const inDetail = S.tab === 'week' && S.detail;
+  $('#title').textContent = inDetail ? dayLabel(S.detail) : TITLES[S.tab];
+  $('#back').hidden = !inDetail;
   $$('.tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === S.tab));
   if (!S.boot) return;
   if (S.tab === 'today') renderToday();
-  else if (S.tab === 'week') renderWeek();
+  else if (S.tab === 'week') (inDetail ? renderDetail() : renderWeek());
   else if (S.tab === 'month') renderMonth();
   else renderTimeline();
-  if (S.focusAdd) {
-    const el = $('.todos[data-key="' + S.focusAdd + '"] .todo.add .text');
-    if (el) el.focus();
-    S.focusAdd = null;
-  }
+  const ed = $('.todo.editing textarea');
+  if (ed) { ed.focus(); ed.setSelectionRange(ed.value.length, ed.value.length); autoGrow(ed); }
 }
 
 function dayOf(key) { return S.boot.week.days.find((d) => d.key === key); }
@@ -126,61 +148,95 @@ function ring(pct) {
 
 function scheduleHtml(items, limit) {
   if (!items.length) return '<ul class="sched"><li class="none">일정 없음</li></ul>';
-  const list = limit ? items.slice(0, limit) : items;
-  return '<ul class="sched">' + list.map((s) => '<li class="' + (s.memo ? 'memo' : '') + '">' + esc(s.text) + '</li>').join('') +
-    (limit && items.length > limit ? '<li class="memo">+' + (items.length - limit) + '</li>' : '') + '</ul>';
+  const list = limit && items.length > limit ? items.slice(0, limit - 1) : items;
+  return '<ul class="sched">' + list.map((s) => '<li class="' + (s.kind === 'memo' ? 'memo' : '') + '">' +
+    (s.kind === 'tt' ? '📚 ' : '') + esc(s.text) + '</li>').join('') +
+    (list.length < items.length ? '<li class="memo">+' + (items.length - list.length) + '개 더</li>' : '') + '</ul>';
 }
 
-/* ---------- 할 일 목록 (오늘·위클리 공용) ---------- */
+/* ---------- 할 일 목록 ---------- */
+/**
+ * full: 체크·누르면 편집(시간·내용·삭제)·추가 / compact(위클리 카드): 보기 + 체크, 누르면 요일 상세
+ */
 function todosHtml(day, compact) {
   const rows = day.todos.map((r, i) => ({ r, i })).filter((x) => x.r[2] || x.r[1]);
   const free = day.todos.findIndex((r) => !r[2] && !r[1]);
-  let html = rows.map(({ r, i }) => {
-    const cls = r[0] ? 'done' : String(r[2]).indexOf(MISSED) === 0 ? 'missed' : '';
-    return '<div class="todo ' + cls + '" data-i="' + i + '">' +
-      '<button type="button" class="check' + (r[0] ? ' on' : '') + '" aria-label="완료"></button>' +
-      '<input class="time" inputmode="numeric" placeholder="시간" value="' + esc(r[1]) + '">' +
-      '<input class="text" value="' + esc(r[2]) + '"></div>';
-  }).join('');
-  if (free >= 0) {
-    html += '<div class="todo add" data-i="' + free + '"><span class="check"></span>' +
-      '<input class="time" inputmode="numeric" placeholder="시간">' +
-      '<input class="text" placeholder="할 일 추가" enterkeyhint="done"></div>';
-  }
+  const editing = S.edit && S.edit.key === day.key ? S.edit.i : -1;
+  let html = rows.map(({ r, i }) => (i === editing ? editorHtml(r) : todoRowHtml(r, i))).join('');
+  if (editing >= 0 && !rows.some((x) => x.i === editing)) html += editorHtml(day.todos[editing]);
+  else if (free >= 0) html += '<button type="button" class="add-todo">할 일 추가</button>';
   return '<div class="todos' + (compact ? ' compact' : '') + '" data-key="' + day.key + '">' + html + '</div>';
 }
+
+function todoRowHtml(r, i) {
+  const cls = r[0] ? 'done' : String(r[2]).indexOf(MISSED) === 0 ? 'missed' : '';
+  return '<div class="todo ' + cls + '" data-i="' + i + '">' +
+    '<button type="button" class="check' + (r[0] ? ' on' : '') + '" aria-label="완료"></button>' +
+    '<div class="body" role="button" tabindex="0">' + (r[1] ? '<span class="tag">' + esc(r[1]) + '</span>' : '') +
+    '<span class="txt">' + esc(r[2]) + '</span></div></div>';
+}
+
+function editorHtml(r) {
+  return '<div class="todo editing">' +
+    '<textarea rows="1" placeholder="할 일" enterkeyhint="done">' + esc(r[2]) + '</textarea>' +
+    '<div class="ed-row"><label>시간 <input type="time" class="time" value="' + esc(normTime(r[1])) + '"></label>' +
+    '<span class="grow"></span>' +
+    (r[2] ? '<button type="button" class="btn-ghost btn-danger" data-act="del">삭제</button>' : '') +
+    '<button type="button" class="btn-ghost" data-act="cancel">취소</button>' +
+    '<button type="button" class="btn-sm" data-act="ok">완료</button></div></div>';
+}
+
+function autoGrow(el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
 
 /** 할 일 목록 이벤트 연결 */
 function bindTodos(root) {
   $$('.todos', root).forEach((list) => {
     const day = dayOf(list.dataset.key);
     if (!day) return;
+    const compact = list.classList.contains('compact');
     list.addEventListener('click', (e) => {
-      const btn = e.target.closest('button.check');
-      if (!btn) return;
-      const i = +btn.closest('.todo').dataset.i;
-      day.todos[i][0] = !day.todos[i][0];
-      commitTodos(day);
-    });
-    list.addEventListener('change', (e) => {
-      const row = e.target.closest('.todo');
-      if (!row) return;
-      const i = +row.dataset.i;
-      const isAdd = row.classList.contains('add');
-      if (e.target.classList.contains('time')) {
-        const v = e.target.value.trim();
-        day.todos[i][1] = normTime(v) || v;
-        if (isAdd && !day.todos[i][2]) return; // 시간만 먼저 적은 경우: 내용 입력까지 기다림
-      } else {
-        day.todos[i][2] = e.target.value.trim();
-        if (isAdd && day.todos[i][2]) S.focusAdd = day.key; // 다음 줄 바로 입력
+      const check = e.target.closest('button.check');
+      if (check) {
+        e.stopPropagation();
+        const i = +check.closest('.todo').dataset.i;
+        day.todos[i][0] = !day.todos[i][0];
+        return commitTodos(day);
       }
-      commitTodos(day);
+      if (compact) return; // 카드 자체 클릭 → 요일 상세 (renderWeek에서 처리)
+      if (e.target.closest('.add-todo')) {
+        S.edit = { key: day.key, i: day.todos.findIndex((r) => !r[2] && !r[1]) };
+        return render();
+      }
+      const body = e.target.closest('.body');
+      if (body) { S.edit = { key: day.key, i: +body.closest('.todo').dataset.i }; return render(); }
+      const act = e.target.closest('[data-act]');
+      if (act) finishEdit(day, act.dataset.act);
     });
+    if (compact) return;
     list.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && e.target.tagName === 'INPUT') e.target.blur();
+      if (e.target.tagName === 'TEXTAREA' && e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); finishEdit(day, 'ok'); }
+      if (e.key === 'Escape') finishEdit(day, 'cancel');
+      if (e.target.classList.contains('body') && e.key === 'Enter') e.target.click();
     });
+    list.addEventListener('input', (e) => { if (e.target.tagName === 'TEXTAREA') autoGrow(e.target); });
   });
+}
+
+/** 편집 끝내기: ok(저장) / del(삭제) / cancel */
+function finishEdit(day, act) {
+  const ed = $('.todos[data-key="' + day.key + '"] .todo.editing');
+  const i = S.edit ? S.edit.i : -1;
+  S.edit = null;
+  if (!ed || i < 0 || act === 'cancel') return render();
+  if (act === 'del') {
+    day.todos[i] = [false, '', ''];
+  } else {
+    const text = $('textarea', ed).value.replace(/\s*\n\s*/g, ' ').trim();
+    const time = normTime($('.time', ed).value);
+    if (!text) day.todos[i] = [false, '', ''];
+    else day.todos[i] = [day.todos[i][0] && !!day.todos[i][2], time, text];
+  }
+  commitTodos(day);
 }
 
 /** 정렬해서 화면 반영 → 뒤에서 저장 → 서버 결과와 다르면 맞춤 */
@@ -194,38 +250,32 @@ function commitTodos(day) {
   });
 }
 
-/* ---------- 오늘 ---------- */
-function renderToday() {
-  const b = S.boot;
-  if (b.todayIndex < 0) {
-    $('#view').innerHTML = '<div class="card empty">위클리 시트가 아직 이번 주가 아니에요. 오른쪽 위 새로고침을 눌러 주세요.</div>';
-    return;
-  }
-  const day = b.week.days[b.todayIndex];
-  const t = todoRate(day.todos);
-  const d = parseKey(b.todayKey);
+/* ---------- 하루 화면 (오늘 탭 · 위클리 요일 상세 공용) ---------- */
+function dayViewHtml(day, isToday) {
+  const b = S.boot, t = todoRate(day.todos);
   const habits = b.habits.map((name, i) => (name ? { name, i } : null)).filter(Boolean);
-
-  $('#view').innerHTML =
-    '<section class="hero"><div><div class="date">' + (d.getMonth() + 1) + '월 ' + d.getDate() + '일 ' +
-      WEEKDAYS[(d.getDay() + 6) % 7] + '요일</div><div class="sub">할 일 ' + t.done + ' / ' + t.total + ' 완료</div></div>' +
-      ring(t.pct) + '</section>' +
+  return '<section class="hero"><div><div class="date">' + dayLabel(day.key) + '</div>' +
+      '<div class="sub">할 일 ' + t.done + ' / ' + t.total + ' 완료</div></div>' + ring(t.pct) + '</section>' +
     '<div class="grid-2"><div>' +
-      '<div class="card"><h3>오늘 일정</h3>' + scheduleHtml(day.schedule) + '</div>' +
-      '<div class="card"><h3>할 일 <small>시간 순 자동 정렬</small></h3>' + todosHtml(day) + '</div>' +
-      (b.overflow.length ? '<div class="card"><h3>넘어온 일 <small>할 일 칸이 꽉 차서 못 들어간 일</small></h3><ul class="carry">' +
+      '<div class="card"><h3>' + (isToday ? '오늘 일정' : '일정') + '</h3>' + scheduleHtml(day.schedule) + '</div>' +
+      '<div class="card"><h3>할 일 <small>누르면 시간·내용 수정</small></h3>' + todosHtml(day) + '</div>' +
+      (isToday && b.overflow.length ? '<div class="card"><h3>넘어온 일 <small>할 일 칸이 꽉 차서 못 들어간 일</small></h3><ul class="carry">' +
         b.overflow.map((it) => '<li>↪ ' + (it.time ? esc(it.time) + ' ' : '') + esc(it.text) + '</li>').join('') + '</ul></div>' : '') +
     '</div><div>' +
-      '<div class="card"><h3>습관 <small>' + habits.filter((h) => day.habits[h.i]).length + ' / ' + habits.length + '</small></h3><div class="habits">' +
+      '<div class="card"><h3><span>습관 <small>' + habits.filter((h) => day.habits[h.i]).length + ' / ' + habits.length + '</small></span>' +
+        '<button type="button" class="link-btn" id="habit-edit">편집</button></h3><div class="habits">' +
         habits.map((h) => '<button type="button" class="habit' + (day.habits[h.i] ? ' on' : '') + '" data-i="' + h.i + '">' +
           '<span class="dot">' + (day.habits[h.i] ? '✓' : esc(h.name.slice(0, 2))) + '</span><span class="name">' + esc(h.name) + '</span></button>').join('') +
+        (habits.length ? '' : '<p class="result">편집을 눌러 습관을 추가해 보세요</p>') +
       '</div></div>' +
       '<div class="card"><h3>기분</h3><div class="moods">' +
         b.moods.map((m, i) => '<button type="button" class="mood' + (day.mood.score === i + 1 ? ' on' : '') + '" data-s="' + (i + 1) + '" aria-label="' + (i + 1) + '점">' + m + '</button>').join('') +
       '</div><input class="field" id="mood-memo" placeholder="한 줄 메모" value="' + esc(day.mood.memo) + '"></div>' +
-      '<div class="card"><h3>새 일정 추가 <small>끝시간은 선택</small></h3>' + eventFormHtml(b.todayKey) + '</div>' +
+      '<div class="card"><h3>새 일정 추가 <small>끝시간은 선택</small></h3>' + eventFormHtml(day.key) + '</div>' +
     '</div></div>';
+}
 
+function bindDayView(day) {
   bindTodos($('#view'));
   $$('.habit').forEach((el) => el.addEventListener('click', () => {
     const i = +el.dataset.i;
@@ -233,6 +283,7 @@ function renderToday() {
     render();
     save('webSetHabit', day.key, i, day.habits[i]);
   }));
+  $('#habit-edit').addEventListener('click', openHabitEditor);
   $$('.mood').forEach((el) => el.addEventListener('click', () => {
     const s = +el.dataset.s;
     day.mood.score = day.mood.score === s ? '' : s;
@@ -244,6 +295,24 @@ function renderToday() {
     save('webSetMood', day.key, day.mood.score, day.mood.memo);
   });
   bindEventForm();
+}
+
+function renderToday() {
+  const b = S.boot;
+  if (b.todayIndex < 0) {
+    $('#view').innerHTML = '<div class="card empty">위클리 시트가 아직 이번 주가 아니에요. 오른쪽 위 새로고침을 눌러 주세요.</div>';
+    return;
+  }
+  const day = b.week.days[b.todayIndex];
+  $('#view').innerHTML = dayViewHtml(day, true);
+  bindDayView(day);
+}
+
+function renderDetail() {
+  const day = dayOf(S.detail);
+  if (!day) { S.detail = null; return renderWeek(); }
+  $('#view').innerHTML = dayViewHtml(day, day.key === S.boot.todayKey);
+  bindDayView(day);
 }
 
 function eventFormHtml(key) {
@@ -271,7 +340,31 @@ function bindEventForm() {
         if (res.ok) form.reset();
         render();
       })
-      .catch((err) => { $('#ev-result').textContent = '오류: ' + ((err && err.message) || err); btn.disabled = false; });
+      .catch((err) => { $('#ev-result').textContent = '오류: ' + errText(err); btn.disabled = false; });
+  });
+}
+
+/* ---------- 요일 상세 열기·닫기 (뒤로가기 지원) ---------- */
+const hist = (window.google && google.script && google.script.history) || null;
+
+function openDetail(key) {
+  S.detail = key; S.edit = null;
+  if (hist) hist.push({ detail: key }, {}, 'day-' + key);
+  render();
+  window.scrollTo(0, 0);
+}
+
+function closeDetail() {
+  S.detail = null; S.edit = null;
+  render();
+}
+
+if (hist) {
+  hist.setChangeHandler((e) => {
+    const key = e.state && e.state.detail;
+    if (key && S.tab === 'week') { S.detail = key; } else { S.detail = null; }
+    S.edit = null;
+    render();
   });
 }
 
@@ -285,7 +378,7 @@ function renderWeek() {
 
   $('#view').innerHTML =
     '<div class="week-head"><b>' + (mon.getMonth() + 1) + '월 ' + mon.getDate() + '일 – ' +
-      (sun.getMonth() + 1 !== mon.getMonth() + 1 ? (sun.getMonth() + 1) + '월 ' : '') + sun.getDate() + '일</b></div>' +
+      (sun.getMonth() !== mon.getMonth() ? (sun.getMonth() + 1) + '월 ' : '') + sun.getDate() + '일</b></div>' +
     '<div class="grid-2"><div class="card"><h3>이번 주</h3><div class="form">' +
       w.info.map((v, i) => '<label class="wide">' + labels[i] + '<input class="field info" data-i="' + i + '" value="' + esc(v) + '"></label>').join('') +
     '</div></div><div class="card"><h3>꼭 끝낼 일 <small>' + w.must.filter((r) => r[1] && r[0]).length + ' / ' + w.must.filter((r) => r[1]).length + '</small></h3>' +
@@ -293,15 +386,18 @@ function renderWeek() {
         '<button type="button" class="check' + (r[0] ? ' on' : '') + '" aria-label="완료"></button>' +
         '<input class="must" value="' + esc(r[1]) + '" placeholder="꼭 끝낼 일"></div>').join('') +
     '</div></div>' +
-    '<div class="days" id="days">' + w.days.map((day, d) => {
+    '<div class="week-tools"><button type="button" class="chip-btn" id="tt-edit">📚 시간표 편집</button>' +
+      '<button type="button" class="chip-btn' + (S.weekGrid ? ' on' : '') + '" id="grid-toggle">' + (S.weekGrid ? '가로 스크롤 보기' : '7칸 한 줄 보기') + '</button></div>' +
+    '<div class="days' + (S.weekGrid ? ' grid7' : '') + '" id="days">' + w.days.map((day, d) => {
       const date = parseKey(day.key), t = todoRate(day.todos);
       const mood = day.mood.score ? S.boot.moods[day.mood.score - 1] + ' ' : '';
-      return '<div class="card day' + (day.key === S.boot.todayKey ? ' today' : '') + '">' +
+      return '<div class="card day' + (day.key === S.boot.todayKey ? ' today' : '') + '" data-key="' + day.key + '">' +
         '<div class="day-head"><b>' + WEEKDAYS[d] + ' ' + (date.getMonth() + 1) + '/' + date.getDate() + '</b><span>' + t.pct + '%</span></div>' +
         scheduleHtml(day.schedule, 3) + todosHtml(day, true) +
         (mood || day.mood.memo ? '<div class="mood-line">' + mood + esc(day.mood.memo) + '</div>' : '') + '</div>';
     }).join('') + '</div>' +
-    '<div class="card" style="margin-top:12px"><h3>습관</h3><div class="scroll-x"><table class="habit-table"><tr><th></th>' +
+    '<div class="card" style="margin-top:12px"><h3><span>습관</span><button type="button" class="link-btn" id="habit-edit">편집</button></h3>' +
+      '<div class="scroll-x"><table class="habit-table"><tr><th></th>' +
       WEEKDAYS.map((n) => '<th>' + n + '</th>').join('') + '<th>%</th></tr>' +
       habits.map((h) => {
         const n = w.days.filter((day) => day.habits[h.i]).length;
@@ -311,6 +407,18 @@ function renderWeek() {
       }).join('') + '</table></div></div>';
 
   bindTodos($('#view'));
+  // 요일 카드 누르면 상세 화면 (체크 버튼은 제외)
+  $$('.day').forEach((card) => card.addEventListener('click', (e) => {
+    if (e.target.closest('button.check')) return;
+    openDetail(card.dataset.key);
+  }));
+  $('#grid-toggle').addEventListener('click', () => {
+    S.weekGrid = !S.weekGrid;
+    writePref('weekGrid', S.weekGrid ? '1' : '');
+    render();
+  });
+  $('#tt-edit').addEventListener('click', openTimetableEditor);
+  $('#habit-edit').addEventListener('click', openHabitEditor);
   $$('.info').forEach((el) => el.addEventListener('change', () => {
     w.info[+el.dataset.i] = el.value.trim();
     save('webSetWeekInfo', w.info);
@@ -326,9 +434,87 @@ function renderWeek() {
     render();
     save('webSetHabit', day.key, i, day.habits[i]);
   }));
-  // 폰: 오늘 카드가 보이게 가로 스크롤
+  // 가로 스크롤이면 오늘 카드가 보이게
   const today = $('.day.today'), days = $('#days');
-  if (today && days.scrollWidth > days.clientWidth) days.scrollLeft = today.offsetLeft - 16;
+  if (today && !S.weekGrid && days.scrollWidth > days.clientWidth) days.scrollLeft = today.offsetLeft - 16;
+}
+
+/* ---------- 시간표 편집 ---------- */
+function openTimetableEditor() {
+  const tt = JSON.parse(JSON.stringify(S.boot.timetable || { start: '', end: '', rows: [] }));
+  const draw = () => {
+    openSheet('<h2>고정 시간표 <button type="button" class="close" data-x>닫기</button></h2>' +
+      '<div class="form" style="margin-bottom:14px"><label>학기 시작<input class="field" type="date" id="tt-start" value="' + tt.start + '"></label>' +
+      '<label>학기 종료<input class="field" type="date" id="tt-end" value="' + tt.end + '"></label></div>' +
+      '<p class="result" style="margin:0 0 10px">학기 기간에만 매주 위클리·오늘 "일정"에 표시돼요 (할 일 10줄은 차지하지 않아요)</p>' +
+      tt.rows.map((r, i) => '<div class="tt-day" data-i="' + i + '"><div class="tt-row">' +
+        '<select class="field" data-f="day">' + WEEKDAYS.map((n, d) => '<option value="' + d + '"' + (r.day === d ? ' selected' : '') + '>' + n + '</option>').join('') + '</select>' +
+        '<input class="field" type="time" data-f="start" value="' + esc(r.start) + '">' +
+        '<input class="field" type="time" data-f="end" value="' + esc(r.end) + '">' +
+        '<button type="button" class="mini" data-del aria-label="삭제">✕</button>' +
+        '<input class="field name" data-f="name" placeholder="이름 (예: 데이터마이닝)" value="' + esc(r.name) + '"></div></div>').join('') +
+      '<button type="button" class="add-todo" id="tt-add">수업 추가</button>' +
+      '<div class="result" id="tt-msg"></div>' +
+      '<div class="sheet-actions"><button type="button" class="btn" id="tt-save">저장</button></div>', (el) => {
+      const sync = () => {
+        tt.start = $('#tt-start', el).value; tt.end = $('#tt-end', el).value;
+        $$('.tt-day', el).forEach((row) => {
+          const r = tt.rows[+row.dataset.i];
+          $$('[data-f]', row).forEach((inp) => { r[inp.dataset.f] = inp.dataset.f === 'day' ? +inp.value : inp.value.trim(); });
+        });
+      };
+      $('[data-x]', el).addEventListener('click', closeSheet);
+      $('#tt-add', el).addEventListener('click', () => { sync(); tt.rows.push({ day: 0, start: '', end: '', name: '' }); draw(); });
+      $$('[data-del]', el).forEach((b) => b.addEventListener('click', () => { sync(); tt.rows.splice(+b.closest('.tt-day').dataset.i, 1); draw(); }));
+      $('#tt-save', el).addEventListener('click', () => {
+        sync();
+        $('#tt-msg', el).textContent = '저장 중…';
+        call('webSetTimetable', tt).then((res) => {
+          S.boot.timetable = res.timetable; S.boot.week = res.week;
+          closeSheet(); render(); notice('시간표를 저장했어요 ✓');
+        }).catch((err) => { $('#tt-msg', el).textContent = '오류: ' + errText(err); });
+      });
+    });
+  };
+  draw();
+}
+
+/* ---------- 습관 편집 ---------- */
+function openHabitEditor() {
+  // from = 원래 순서 번호 (위클리 체크를 따라 옮기기 위해), 새 습관은 null
+  const list = S.boot.habits.map((name, i) => ({ name, from: i })).filter((h) => h.name);
+  const draw = () => {
+    openSheet('<h2>습관 편집 <button type="button" class="close" data-x>닫기</button></h2>' +
+      list.map((h, i) => '<div class="edit-row" data-i="' + i + '">' +
+        '<input class="field" value="' + esc(h.name) + '" placeholder="습관 이름">' +
+        '<button type="button" class="mini" data-up' + (i === 0 ? ' disabled' : '') + ' aria-label="위로">↑</button>' +
+        '<button type="button" class="mini" data-down' + (i === list.length - 1 ? ' disabled' : '') + ' aria-label="아래로">↓</button>' +
+        '<button type="button" class="mini" data-del aria-label="삭제">✕</button></div>').join('') +
+      (list.length < HABIT_MAX ? '<button type="button" class="add-todo" id="h-add">습관 추가 (' + list.length + ' / ' + HABIT_MAX + ')</button>' : '<p class="result">최대 ' + HABIT_MAX + '개예요</p>') +
+      '<p class="result">이름을 바꾸거나 지워도 기록 시트의 예전 기록은 그대로 남아요</p>' +
+      '<div class="result" id="h-msg"></div>' +
+      '<div class="sheet-actions"><button type="button" class="btn" id="h-save">저장</button></div>', (el) => {
+      const sync = () => $$('.edit-row', el).forEach((row) => { list[+row.dataset.i].name = $('input', row).value.trim(); });
+      const move = (i, to) => { sync(); const [h] = list.splice(i, 1); list.splice(to, 0, h); draw(); };
+      $('[data-x]', el).addEventListener('click', closeSheet);
+      $$('.edit-row', el).forEach((row) => {
+        const i = +row.dataset.i;
+        $('[data-up]', row).addEventListener('click', () => move(i, i - 1));
+        $('[data-down]', row).addEventListener('click', () => move(i, i + 1));
+        $('[data-del]', row).addEventListener('click', () => { sync(); list.splice(i, 1); draw(); });
+      });
+      const add = $('#h-add', el);
+      if (add) add.addEventListener('click', () => { sync(); list.push({ name: '', from: null }); draw(); const ins = $$('.edit-row input', $('#sheet')); ins[ins.length - 1].focus(); });
+      $('#h-save', el).addEventListener('click', () => {
+        sync();
+        $('#h-msg', el).textContent = '저장 중…';
+        call('webSetHabits', list.filter((h) => h.name)).then((b) => {
+          S.boot = b; closeSheet(); render(); notice('습관을 저장했어요 ✓');
+        }).catch((err) => { $('#h-msg', el).textContent = '오류: ' + errText(err); });
+      });
+    });
+  };
+  draw();
 }
 
 /* ---------- 먼슬리 ---------- */
@@ -339,7 +525,7 @@ function loadMonth() {
     if (want !== S.ym.y + '-' + S.ym.m) return; // 그사이 다른 달로 넘김
     S.month = data;
     if (S.tab === 'month' && !isEditing()) render();
-  }).catch((err) => notice('먼슬리를 불러오지 못했어요 · ' + ((err && err.message) || err), true));
+  }).catch((err) => notice('먼슬리를 불러오지 못했어요 · ' + errText(err), true));
 }
 
 function renderMonth() {
@@ -354,40 +540,89 @@ function renderMonth() {
   for (let i = 0; i < M.offset; i++) cells += '<div class="cell blank"></div>';
   M.dates.forEach((c) => {
     const key = M.y + '-' + pad(M.m) + '-' + pad(c.day);
+    const shown = c.items.length > 2 ? c.items.slice(0, 1) : c.items; // 넘치면 1개 + "+N"
     cells += '<button type="button" class="cell' + (key === M.todayKey ? ' today' : '') + (S.selDay === c.day ? ' sel' : '') + '" data-day="' + c.day + '">' +
       '<span class="num">' + c.day + (c.mood ? '<i class="mdot" style="background:' + MOOD_COLORS[c.mood] + '"></i>' : '') + '</span>' +
-      c.events.slice(0, 2).map((e) => '<span class="ev">' + esc(e) + '</span>').join('') +
-      (c.events.length ? '<span class="evdots">' + c.events.slice(0, 3).map(() => '<i></i>').join('') + '</span>' : '') +
+      shown.map((it) => '<span class="ev ' + it.kind + '">' + esc(it.kind === 'memo' ? it.title : it.text) + '</span>').join('') +
+      (c.items.length > shown.length ? '<span class="more">+' + (c.items.length - shown.length) + '</span>' : '') +
       '</button>';
   });
-  const sel = S.selDay ? M.dates[S.selDay - 1] : null;
 
   $('#view').innerHTML = monthNavHtml() +
-    '<div class="card"><div class="cal">' + cells + '</div></div>' +
-    (sel ? '<div class="card"><h3>' + M.m + '월 ' + sel.day + '일' + (sel.mood ? ' <small>기분 ' + S.boot.moods[sel.mood - 1] + '</small>' : '') + '</h3>' +
-      scheduleHtml(sel.events.map((t) => ({ text: t })).concat(sel.memo ? [{ text: sel.memo, memo: true }] : [])) +
-      (sel.todo[1] ? '<p class="result">할 일 ' + sel.todo[0] + ' / ' + sel.todo[1] + ' 완료</p>' : '') + '</div>' : '') +
+    '<div class="card"><div class="cal">' + cells + '</div><p class="result" style="margin:10px 0 0">날짜를 누르면 일정을 추가·수정할 수 있어요</p></div>' +
     '<div class="grid-2"><div>' +
       '<div class="card"><h3>이번 달 목표</h3>' + M.goals.map((r, i) => '<div class="row-check' + (r[0] ? ' done' : '') + '" data-i="' + i + '">' +
         '<button type="button" class="check' + (r[0] ? ' on' : '') + '" aria-label="완료"></button>' +
         '<input value="' + esc(r[1]) + '" placeholder="목표 ' + (i + 1) + '"></div>').join('') + '</div>' +
       '<div class="card"><h3>습관 달성률 <small>' + M.elapsed + '일 기준</small></h3>' +
         (M.habits.length ? M.habits.map((h) => '<div class="rate-row"><span>' + esc(h.name) + '</span><div class="bar"><i style="width:' +
-          Math.round(h.rate * 100) + '%"></i></div><span>' + Math.round(h.rate * 100) + '%</span></div>').join('') : '<p class="result">설정 시트에 습관을 적어 주세요</p>') +
+          Math.round(h.rate * 100) + '%"></i></div><span>' + Math.round(h.rate * 100) + '%</span></div>').join('') : '<p class="result">습관을 추가해 주세요</p>') +
       '</div></div><div>' +
       '<div class="card"><h3>기분 그래프</h3>' + moodChart(M) + '</div>' +
     '</div></div>';
 
   bindMonthNav();
   $$('.cal .cell[data-day]').forEach((el) => el.addEventListener('click', () => {
-    const n = +el.dataset.day;
-    S.selDay = S.selDay === n ? null : n;
+    S.selDay = +el.dataset.day;
     render();
+    openDayItems(S.selDay, null);
   }));
   $$('.row-check').forEach((row) => {
     const i = +row.dataset.i;
     $('button', row).addEventListener('click', () => { M.goals[i][0] = !M.goals[i][0]; render(); save('webSetMonthGoals', M.y, M.m, M.goals); });
     $('input', row).addEventListener('change', (e) => { M.goals[i][1] = e.target.value.trim(); save('webSetMonthGoals', M.y, M.m, M.goals); });
+  });
+}
+
+/**
+ * 날짜 일정 입력창: 위에는 그날 일정 목록(내 일정은 눌러서 수정·삭제), 아래는 입력 폼
+ * editIndex = 수정할 내 일정 번호 (새로 추가면 null)
+ */
+function openDayItems(dayNum, editIndex, message) {
+  const M = S.month, c = M.dates[dayNum - 1];
+  const key = M.y + '-' + pad(M.m) + '-' + pad(dayNum);
+  const memo = editIndex === null ? null : c.items.find((it) => it.kind === 'memo' && it.index === editIndex);
+  openSheet('<h2>' + dayLabel(key) + ' <button type="button" class="close" data-x>닫기</button></h2>' +
+    (c.items.length ? '<ul class="item-list">' + c.items.map((it) => it.kind === 'memo'
+      ? '<li class="' + (memo && memo.index === it.index ? 'sel' : '') + '"><button type="button" data-idx="' + it.index + '">' + esc(it.text) +
+        (it.linked ? ' <span class="badge">캘린더에도 있음</span>' : '') + '</button></li>'
+      : '<li><div class="ro">' + esc(it.text) + ' <span class="badge">구글 캘린더</span></div></li>').join('') + '</ul>' : '') +
+    '<form class="form" id="memo-form" autocomplete="off">' +
+      '<label class="wide">제목<input class="field" name="title" required value="' + esc(memo ? memo.title : '') + '"></label>' +
+      '<label>시작 (선택)<input class="field" type="time" name="start" value="' + esc(memo ? memo.start : '') + '"></label>' +
+      '<label>끝 (선택)<input class="field" type="time" name="end" value="' + esc(memo ? memo.end : '') + '"></label>' +
+      (memo && memo.linked ? '' : '<label class="switch wide">구글 캘린더에도 추가<input type="checkbox" name="cal"></label>') +
+      '<div class="result wide" id="memo-msg">' + esc(message || '') + '</div>' +
+      '<div class="sheet-actions wide">' +
+        (memo ? '<button type="button" class="btn-ghost btn-danger" id="memo-del">삭제</button><button type="button" class="btn-ghost" id="memo-new">새로 쓰기</button>' : '') +
+        '<button type="submit" class="btn">' + (memo ? '수정 저장' : '일정 저장') + '</button></div>' +
+    '</form>', (el) => {
+    const done = (res) => {
+      if (res.month) S.month = res.month;
+      S.selDay = dayNum;
+      render();
+      if (res.ok) { closeSheet(); notice(res.message); reload(false); }
+      else openDayItems(dayNum, editIndex, res.message);
+    };
+    const fail = (err) => { $('#memo-msg', el).textContent = '오류: ' + errText(err); };
+    $('[data-x]', el).addEventListener('click', () => { closeSheet(); S.selDay = null; render(); });
+    $$('[data-idx]', el).forEach((b) => b.addEventListener('click', () => openDayItems(dayNum, +b.dataset.idx)));
+    const nw = $('#memo-new', el);
+    if (nw) nw.addEventListener('click', () => openDayItems(dayNum, null));
+    const del = $('#memo-del', el);
+    if (del) del.addEventListener('click', () => {
+      $('#memo-msg', el).textContent = '삭제 중…';
+      call('webDeleteMemoItem', key, memo.index, memo.text, M.y, M.m).then(done).catch(fail);
+    });
+    $('#memo-form', el).addEventListener('submit', (e) => {
+      e.preventDefault();
+      const f = new FormData(e.target);
+      $('#memo-msg', el).textContent = '저장 중…';
+      $('button[type=submit]', el).disabled = true;
+      call('webSaveMemoItem', key, memo ? memo.index : null, memo ? memo.text : '',
+        { title: f.get('title'), start: f.get('start'), end: f.get('end'), toCalendar: !!f.get('cal') }, M.y, M.m)
+        .then(done).catch(fail);
+    });
   });
 }
 
@@ -438,7 +673,7 @@ function loadTimeline(key) {
     if (res.key !== S.tl.key) return;
     S.tl.slots = res.slots;
     if (S.tab === 'timeline') render();
-  }).catch((err) => notice('타임라인을 불러오지 못했어요 · ' + ((err && err.message) || err), true));
+  }).catch((err) => notice('타임라인을 불러오지 못했어요 · ' + errText(err), true));
 }
 
 function catColor(name) {
@@ -554,29 +789,57 @@ function flushTimeline() {
   save('webSetTimeline', S.tl.key, S.tl.slots.slice());
 }
 
+/* ---------- 아이폰 노치·하단 바 보정 ---------- */
+// 웹앱은 구글 페이지 안 iframe이라 env(safe-area-inset-*)가 0으로 나올 수 있음 → 노치 있는 아이폰이면 기본값 사용
+function fixSafeArea() {
+  const probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;visibility:hidden;padding-bottom:env(safe-area-inset-bottom);padding-top:env(safe-area-inset-top)';
+  document.body.appendChild(probe);
+  const cs = getComputedStyle(probe);
+  const bottom = parseFloat(cs.paddingBottom) || 0, top = parseFloat(cs.paddingTop) || 0;
+  probe.remove();
+  const iPhone = /iPhone/.test(navigator.userAgent);
+  const notch = iPhone && Math.max(screen.width, screen.height) >= 812; // X 이후 모델
+  const standalone = window.matchMedia && window.matchMedia('(display-mode: standalone)').matches;
+  if (notch && bottom === 0) document.documentElement.style.setProperty('--sab', '24px');
+  if (notch && standalone && top === 0) document.documentElement.style.setProperty('--sat', '47px');
+}
+
 /* ---------- 시작 ---------- */
 $$('.tabs button').forEach((b) => b.addEventListener('click', () => {
   if (S.tab === 'timeline') flushTimeline();
+  if (S.tab === b.dataset.tab && S.tab === 'week' && S.detail) { closeDetail(); return; } // 위클리 탭 다시 누르면 목록으로
   S.tab = b.dataset.tab;
-  writeTab(S.tab);
+  S.edit = null;
+  writePref('tab', S.tab);
   render();
   if (S.tab === 'month') loadMonth();
   window.scrollTo(0, 0);
 }));
+$('#back').addEventListener('click', () => {
+  if (hist) {
+    history.back(); // 구글 웹앱 기록에서 한 단계 뒤로 → setChangeHandler가 닫음
+    setTimeout(() => { if (S.detail) closeDetail(); }, 400);
+  } else {
+    closeDetail();
+  }
+});
+$('#sheet-bg').addEventListener('click', (e) => { if (e.target.id === 'sheet-bg') closeSheet(); });
 window.addEventListener('pointerup', stopPaint);
 $('#refresh').addEventListener('click', () => {
   notice('캘린더를 새로 불러오는 중…');
   reload(true).then((b) => { if (b) notice('새로 불러왔어요 ✓'); });
 });
-// 시트에서 바꾼 내용 반영: 화면으로 돌아올 때 + 1분마다 (입력 중·저장 중이면 건너뜀)
+// 시트에서 바꾼 내용 반영: 화면으로 돌아올 때 + 1분마다 (입력·편집 중·저장 중이면 건너뜀)
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) { flushTimeline(); return; }
-  if (Date.now() - S.lastLoad > 20000 && !S.pending) reload(false);
+  if (Date.now() - S.lastLoad > 20000 && !S.pending && !isEditing()) reload(false);
 });
 setInterval(() => {
   if (!document.hidden && !S.pending && !isEditing() && !S.tl.painting) reload(false);
 }, 60000);
 
+fixSafeArea();
 render();
 reload(false);
 </script>

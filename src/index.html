@@ -10,6 +10,9 @@
 </head>
 <body>
   <header class="top">
+    <button id="back" class="icon-btn" type="button" aria-label="뒤로" hidden>
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
     <h1 id="title">오늘</h1>
     <span id="saving" class="saving"></span>
     <button id="refresh" class="icon-btn" type="button" aria-label="캘린더 새로고침">
@@ -20,6 +23,11 @@
   <main id="view"><p class="empty">불러오는 중…</p></main>
 
   <div id="notice" class="notice" role="status" hidden></div>
+
+  <!-- 아래에서 올라오는 입력창 (일정·시간표·습관 편집) -->
+  <div id="sheet-bg" class="sheet-bg" hidden>
+    <div class="sheet" role="dialog" aria-modal="true" id="sheet"></div>
+  </div>
 
   <nav class="tabs" aria-label="화면">
     <button type="button" data-tab="today">
