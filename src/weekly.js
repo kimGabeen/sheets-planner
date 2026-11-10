@@ -37,6 +37,9 @@ function buildWeekly_(theme) {
   buildWeeklyHabits_(sh, theme);
   buildWeeklyCharts_(sh, theme, light);
   applyWeeklyRules_(sh, theme, pale);
+  // 할 일 메모 (숨김, 할 일과 같은 줄)
+  sh.getRange(L.TODO_START - 1, L.MEMO_COL0, 1, 7).setValues([WEEKDAY_NAMES_.map(function (n) { return n + ' 메모'; })]);
+  sh.hideColumns(L.MEMO_COL0, 7);
   if (old) restoreWeekly_(sh, old);
 }
 
@@ -352,7 +355,7 @@ function onWeeklyEdit_(e) {
     const inTodo = hit_(e.range, L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, L.DAY_SPAN);
     const inMood = hit_(e.range, L.MOOD, L.checkCol(d), 2, L.DAY_SPAN);
     const inHabit = hit_(e.range, L.HABIT_START, L.HABIT_DAY_COL + d, CONFIG.HABIT_COUNT, 1);
-    if (inTodo) sortTodos_(sh, L.TODO_START, L.checkCol(d)); // 미완료(시간순) → 체크된 일
+    if (inTodo) sortTodos_(sh, L.TODO_START, L.checkCol(d), L.memoCol(d)); // 미완료(시간순) → 체크된 일, 메모도 같이
     if (inTodo || inMood || inHabit) {
       archiveDayLive_(addDays_(mon, d));
       if (d === todayIdx) touchedToday = true;
@@ -402,6 +405,7 @@ function startNewWeek_() {
   for (let d = 0; d < 7; d++) {
     sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 1).setValue(false);
     sh.getRange(L.TODO_START, L.timeCol(d), CONFIG.TODO_ROWS, 2).clearContent();
+    memoRange_(sh, L.TODO_START, L.memoCol(d)).clearContent();
     sh.getRange(L.MOOD, L.checkCol(d), 2, 1).clearContent();
   }
   sh.getRange(L.HABIT_START, L.HABIT_DAY_COL, CONFIG.HABIT_COUNT, 7).setValue(false);

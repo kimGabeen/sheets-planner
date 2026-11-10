@@ -142,6 +142,8 @@ const WEEKLY = (function () {
   L.HABIT_BAR_COL = L.HABIT_DAY_COL + 7;
   L.HABIT_PCT_COL = L.HABIT_BAR_COL + 1;
   L.CHART_DATA_COL = L.HABIT_PCT_COL + 2; // 숨김 차트 데이터
+  L.MEMO_COL0 = L.CHART_DATA_COL + 4; // 숨김: 요일별 할 일 메모 (월~일 7열, 할 일과 같은 줄)
+  L.memoCol = function (d) { return L.MEMO_COL0 + d; };
   L.MUST_PROGRESS = L.MUST_START + CONFIG.MUST_COUNT;
   L.OVERALL = { row: L.DAY_HEADER - 1, col: L.HABIT_NAME_COL };
   L.RATE = L.DAY_HEADER + 1;
@@ -151,7 +153,7 @@ const WEEKLY = (function () {
   L.MOOD = L.COUNT + 1;
   L.MOOD_MEMO = L.MOOD + 1;
   L.HABIT_START = L.DAY_HEADER + 1;
-  L.LAST_COL = L.CHART_DATA_COL + 2;
+  L.LAST_COL = L.MEMO_COL0 + 6;
   return L;
 })();
 
@@ -222,6 +224,7 @@ const TODAY = (function () {
   r += 6;
   L.OVERFLOW_HEADER = r; L.OVERFLOW_START = r + 1; // 맨 아래: 빈 줄이 없어 못 넘어간 일
   L.LAST_ROW = L.OVERFLOW_START + CONFIG.TODO_ROWS - 1;
+  L.MEMO_COL = 4; // 숨김: 할 일 메모 (D열, 할 일과 같은 줄)
   return L;
 })();
 

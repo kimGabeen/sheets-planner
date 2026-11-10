@@ -108,8 +108,10 @@ function createEnv() {
   const events = [];
   let nextId = 1;
   const cache = new Map();
-  const mkEvent = (title, start, end, allDay) => ({
-    title, start, end, allDay,
+  const mkEvent = (title, start, end, allDay, opts) => ({
+    title, start, end, allDay, description: (opts && opts.description) || '',
+    getDescription() { return this.description; },
+    setDescription(d) { this.description = d; return this; },
     getTitle() { return this.title; }, isAllDayEvent() { return this.allDay; },
     getStartTime() { return this.start; }, getEndTime() { return this.end; },
     getAllDayStartDate() { return this.start; }, getAllDayEndDate() { return this.end; },
@@ -125,8 +127,8 @@ function createEnv() {
     getEvents: (s, e) => events.filter((ev) => ev.start < e && ev.end > s),
     getEventsForDay: (d) => events.filter((ev) => sameDay(ev.start, d)),
     getEventById: (id) => events.find((ev) => ev.id === id) || null,
-    createEvent: (t, s, e) => { const ev = mkEvent(t, s, e, false); events.push(ev); return ev; },
-    createAllDayEvent: (t, d) => { const ev = mkEvent(t, d, new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), true); events.push(ev); return ev; },
+    createEvent: (t, s, e, o) => { const ev = mkEvent(t, s, e, false, o); events.push(ev); return ev; },
+    createAllDayEvent: (t, d, o) => { const ev = mkEvent(t, d, new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), true, o); events.push(ev); return ev; },
   };
   // "대한민국의 휴일" 공개 캘린더 (subscribed=false면 구독 전 상태)
   const holidays = { subscribed: false, list: [

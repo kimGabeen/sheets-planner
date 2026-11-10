@@ -274,4 +274,11 @@
   .confirm { font-size: 15px; font-weight: 700; color: #8A3B2E; display: flex; align-items: center; }
   .btn-del { background: #8A3B2E; flex: 0 0 auto !important; }
   .sheet-actions .grow { flex: 1; }
+
+  /* 숨김 메모 */
+  .note-ic { display: inline-block; vertical-align: -1px; color: var(--sub); flex: 0 0 auto; }
+  .todo.done .note-ic { opacity: .6; }
+  .cal .ev .note-ic { width: 10px; height: 10px; }
+  .todo.editing textarea.t-memo { font-size: 14px; color: var(--text); min-height: 56px; }
+  textarea.memo-field { resize: vertical; min-height: 72px; font: inherit; font-size: 15px; line-height: 1.45; }
 </style>

@@ -214,6 +214,12 @@ function setStatus_(key, msg) {
   if (sh && row) sh.getRange(row, 2).setValue(stamp_() + '  ' + msg);
 }
 
+/** 할 일 메모 칸 (10줄, 열이 모자라면 늘림 — setup 전에도 동작) */
+function memoRange_(sh, row, col) {
+  ensureSize_(sh, row + CONFIG.TODO_ROWS, col);
+  return sh.getRange(row, col, CONFIG.TODO_ROWS, 1);
+}
+
 /** 행 번호 목록(오름차순)을 연속 구간끼리 묶어 아래쪽부터 삭제 */
 function deleteRowList_(sh, rows) {
   if (!rows.length) return;

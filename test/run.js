@@ -219,7 +219,7 @@ test('webBoot: 오늘 위치·7일·카테고리', () => {
 test('webSetTodos: 정렬 결과 반환 + 위클리·오늘 시트·기록 반영', () => {
   const env = envAt(2026, 11, 11);
   const rows = env.ctx.webSetTodos('2026-11-11', [[true, '', '끝'], [false, '1530', '회의'], [false, '', '독서']]);
-  same(rows.slice(0, 4), [[false, '15:30', '회의'], [false, '', '독서'], [true, '', '끝'], [false, '', '']]);
+  same(rows.slice(0, 4).map((r) => r.slice(0, 3)), [[false, '15:30', '회의'], [false, '', '독서'], [true, '', '끝'], [false, '', '']]);
   same(weeklyTodos(env, 2)[0], [false, '15:30', '회의']);
   assert.strictEqual(ts(env).getRange(T(env).TODO_START, 3).getValue(), '회의', '오늘 시트 반영');
   assert.strictEqual(archiveRows(env).filter((r) => r.cat === '할일').length, 3);
@@ -428,7 +428,7 @@ test('할 일 시간 범위: "11-13", "11~13", "1100-1300" 자동 변환 + 시�
     [false, '', '점심 약속 11~13'], [false, '', '1400-1530 회의'], [false, '', '9-10 운동'], [false, '15:00', '전화'],
     [false, '', '3-4쪽 읽기'], [false, '10:00-09:00', '이상한 시간'],
   ]);
-  same(rows.slice(0, 6), [
+  same(rows.slice(0, 6).map((r) => r.slice(0, 3)), [
     [false, '09:00-10:00', '운동'], [false, '11:00-13:00', '점심 약속'], [false, '14:00-15:30', '회의'],
     [false, '15:00', '전화'], [false, '', '3-4쪽 읽기'], [false, '10:00-09:00', '이상한 시간'],
   ]);
@@ -456,4 +456,49 @@ test('서버 캐시: 같은 데이터는 캐시에서, 쓰기·시트 편집 뒤
   edit(env, ts(env), T(env).TODO_START, 3); // 시트 편집(설치형 onEdit) → 캐시 무효화
   assert.strictEqual(env.ctx.webBoot().week.days[2].todos[0][2], '캐시 확인');
 });
+
+console.log('숨김 메모');
+test('할 일 메모: 같은 줄 숨김 칸에 저장, 정렬 때 같이 이동, 오늘 시트에도 반영, 기록에는 없음', () => {
+  const env = envAt(2026, 11, 11);
+  const rows = env.ctx.webSetTodos('2026-11-11', [[true, '', '끝난 일', '끝난 일 메모'], [false, '', '독서', ''], [false, '9-10', '운동', '스쿼트 3세트\n런지']]);
+  same(rows.slice(0, 3), [[false, '09:00-10:00', '운동', '스쿼트 3세트\n런지'], [false, '', '독서', ''], [true, '', '끝난 일', '끝난 일 메모']]);
+  const W2 = W(env);
+  same(ws(env).getRange(W2.TODO_START, W2.memoCol(2), 3, 1).getValues(), [['스쿼트 3세트\n런지'], [''], ['끝난 일 메모']]);
+  assert.strictEqual(ts(env).getRange(T(env).TODO_START, T(env).MEMO_COL).getValue(), '스쿼트 3세트\n런지', '오늘 시트 D열');
+  // 시트에서 체크해 순서가 바뀌어도 메모가 따라감
+  ws(env).getRange(W2.TODO_START, W2.checkCol(2)).setValue(true);
+  edit(env, ws(env), W2.TODO_START, W2.checkCol(2));
+  same(ws(env).getRange(W2.TODO_START, W2.textCol(2), 3, 1).getValues(), [['독서'], ['운동'], ['끝난 일']]);
+  same(ws(env).getRange(W2.TODO_START, W2.memoCol(2), 3, 1).getValues(), [[''], ['스쿼트 3세트\n런지'], ['끝난 일 메모']]);
+  assert.ok(archiveRows(env).every((r) => !String(r.item).includes('스쿼트') && !String(r.value).includes('스쿼트')), '기록 시트엔 메모 없음');
+  assert.strictEqual(env.ctx.webBoot().week.days[2].todos[1][3], '스쿼트 3세트\n런지');
+});
+test('할 일이 다음 날로 넘어갈 때 메모도 같이', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSetTodos('2026-11-11', [[false, '', '보고서', '3쪽까지 썼음'], [true, '', '장보기', '우유']]);
+  env.ctx.today_ = () => new Date(2026, 10, 12);
+  env.run('midnightJob()');
+  const thu = env.ctx.webBoot().week.days[3].todos;
+  same(thu[0], [false, '', '↪ 보고서', '3쪽까지 썼음']);
+});
+test('일정 메모: 먼슬리 메모와 함께 저장 + 구글 캘린더 설명, 캘린더 설명은 메모로 보임', () => {
+  const env = envAt(2026, 11, 11);
+  let res = env.ctx.webSaveItem('2026-11-12', null, { title: '스터디', start: '15:00', end: '16:00', memo: '3장 발표 준비\n노트북 챙기기' }, 2026, 11);
+  assert.ok(res.ok, res.message);
+  assert.strictEqual(env.events[0].description, '3장 발표 준비\n노트북 챙기기', '캘린더 설명');
+  const item = res.week.days[3].schedule[0];
+  assert.strictEqual(item.memo, '3장 발표 준비\n노트북 챙기기');
+  assert.strictEqual(item.text, '15:00-16:00 스터디', '목록 글자에는 메모 없음');
+  const memoRow = env.run('readEvents_()').find((r) => r[1] === '메모');
+  assert.strictEqual(memoRow[6], '3장 발표 준비\n노트북 챙기기', '먼슬리 메모 줄에 함께 저장');
+  // 수정하면 캘린더 설명도 수정
+  res = env.ctx.webSaveItem('2026-11-12', item.ref, { title: '스터디', start: '15:00', end: '16:00', memo: '장소: 도서관' }, 2026, 11);
+  assert.strictEqual(env.events[0].description, '장소: 도서관');
+  assert.strictEqual(res.month.dates[11].items[0].memo, '장소: 도서관');
+  // 구글 캘린더에서 직접 만든 일정의 설명 → 메모
+  env.ctx.CalendarApp.getDefaultCalendar().createAllDayEvent('동아리', new Date(2026, 10, 13), { description: '회비 내기' });
+  env.ctx.syncCalendarHourly();
+  assert.strictEqual(env.ctx.webBoot().week.days[4].schedule[0].memo, '회비 내기');
+});
+
 console.log(`\n${passed}개 통과` + (process.exitCode ? ' (실패 있음)' : ''));

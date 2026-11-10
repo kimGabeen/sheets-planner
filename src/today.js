@@ -10,7 +10,7 @@ function buildToday_(theme) {
   const T = TODAY, C = CONFIG.COLORS, n = CONFIG.TODO_ROWS;
   const pale = tint_(theme, CONFIG.TINT.PALE);
   const ev = CONFIG.SHEETS.EVENTS;
-  ensureSize_(sh, T.LAST_ROW + 2, 3);
+  ensureSize_(sh, T.LAST_ROW + 2, T.MEMO_COL);
   // 예전 레이아웃이면 비우고 새로 그림 (값은 위클리에서 다시 채워짐)
   if (needsMigration_() && sh.getLastRow() > 0) wipeSheet_(sh);
   resetLayout_(sh);
@@ -20,6 +20,8 @@ function buildToday_(theme) {
   sh.setRowHeights(1, T.LAST_ROW + 1, CONFIG.SIZE.TODAY_ROW);
   sh.setRowHeight(T.DATE_ROW, 48);
   sh.setFrozenRows(1);
+  sh.getRange(T.TODO_HEADER, T.MEMO_COL).setValue('메모');
+  sh.hideColumns(T.MEMO_COL); // 할 일 메모 (숨김)
 
   // 섹션 머리글 (3열 병합, count가 있으면 "제목  3 / 10")
   const header = function (row, text, count) {
@@ -138,6 +140,7 @@ function todayBlocks_(d) {
     { t: [T.TODO_START, 1], w: [W.TODO_START, W.checkCol(d)], n: CONFIG.TODO_ROWS, todo: true },
     { t: [T.TODO_START, 2], w: [W.TODO_START, W.timeCol(d)], n: CONFIG.TODO_ROWS, todo: true, disp: true },
     { t: [T.TODO_START, 3], w: [W.TODO_START, W.textCol(d)], n: CONFIG.TODO_ROWS, todo: true },
+    { t: [T.TODO_START, T.MEMO_COL], w: [W.TODO_START, W.memoCol(d)], n: CONFIG.TODO_ROWS, todo: true },
     { t: [T.HABIT_START, 1], w: [W.HABIT_START, W.HABIT_DAY_COL + d], n: CONFIG.HABIT_COUNT },
     { t: [T.MUST_START, 1], w: [W.MUST_START, 1], n: CONFIG.MUST_COUNT },
     { t: [T.MUST_START, 2], w: [W.MUST_START, 2], n: CONFIG.MUST_COUNT },
@@ -154,6 +157,8 @@ function copyBlocks_(fromSheet, toSheet, blocks, from, edited) {
   const to = from === 't' ? 'w' : 't';
   blocks.forEach(function (b) {
     if (edited && !hit_(edited, b[from][0], b[from][1], b.n, 1)) return;
+    ensureSize_(fromSheet, b[from][0] + b.n, b[from][1]);
+    ensureSize_(toSheet, b[to][0] + b.n, b[to][1]);
     const src = fromSheet.getRange(b[from][0], b[from][1], b.n, 1);
     const vals = b.disp ? src.getDisplayValues() : src.getValues();
     toSheet.getRange(b[to][0], b[to][1], b.n, 1).setValues(vals);
@@ -222,7 +227,7 @@ function onTodayEdit_(e) {
   if (!touched) return;
   const weekly = sheet_(CONFIG.SHEETS.WEEKLY);
   if (hit_(e.range, T.TODO_START, 1, CONFIG.TODO_ROWS, 3)) {
-    sortTodos_(sh, T.TODO_START, 1); // 정렬로 줄이 움직이므로 할 일 묶음 전체 복사
+    sortTodos_(sh, T.TODO_START, 1, T.MEMO_COL); // 정렬로 줄이 움직이므로 할 일 묶음 전체 복사 (메모 포함)
     copyBlocks_(sh, weekly, blocks.filter(function (b) { return b.todo; }), 't');
   }
   copyBlocks_(sh, weekly, blocks.filter(function (b) { return !b.todo; }), 't', e.range);

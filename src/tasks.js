@@ -65,15 +65,17 @@ function stripCarry_(text) {
 }
 
 /**
- * 할 일 10줄 정렬 (row, col = 체크박스 칸의 첫 줄)
+ * 할 일 10줄 정렬 (row, col = 체크박스 칸의 첫 줄, memoCol = 같은 줄 메모 칸)
  * 순서: ① 체크 안 된 일 중 시간 있는 것(시작 시간순) ② 시간 없는 것(입력 순)
  *       ③ 체크된 일·"미완 →" 일 ④ 빈 줄
  * 순서가 그대로면 쓰지 않음. 반환: 바뀌었는지
  */
-function sortTodos_(sh, row, col) {
+function sortTodos_(sh, row, col, memoCol) {
   const n = CONFIG.TODO_ROWS;
   const range = sh.getRange(row, col, n, 3);
   const vals = range.getValues(), disp = range.getDisplayValues();
+  const memoR = memoCol ? memoRange_(sh, row, memoCol) : null;
+  const memos = memoR ? memoR.getValues().map(function (r) { return String(r[0]); }) : null;
   const items = vals.map(function (r, i) {
     let raw = String(disp[i][1]).trim(), text = String(r[2]).trim();
     // 시간 칸이 비어 있고 내용에 '11-13' 같은 범위가 있으면 시간으로 옮김
@@ -96,6 +98,7 @@ function sortTodos_(sh, row, col) {
   const before = items.map(function (it) { return [it.done, String(disp[it.i][1]).trim(), it.text]; });
   if (JSON.stringify(out) === JSON.stringify(before)) return false;
   range.setValues(out);
+  if (memoR) memoR.setValues(sorted.map(function (it) { return [memos[it.i]]; })); // 메모도 같은 순서로
   return true;
 }
 
@@ -127,17 +130,18 @@ function carryOver_() {
   if (yd >= 0) {
     const range = sh.getRange(W.TODO_START, W.checkCol(yd), n, 3);
     const vals = range.getValues(), disp = range.getDisplayValues();
+    const memos = memoRange_(sh, W.TODO_START, W.memoCol(yd)).getValues();
     const texts = vals.map(function (r) { return [r[2]]; });
     vals.forEach(function (r, i) {
       const t = String(r[2]).trim();
       if (!t || r[0] === true || isMissed_(t)) return;
       const name = stripCarry_(t);
-      items.push({ time: normRange_(disp[i][1]), text: name });
+      items.push({ time: normRange_(disp[i][1]), text: name, memo: String(memos[i][0]) }); // 메모도 같이 넘김
       texts[i][0] = C.MISSED + name;
     });
     if (items.length) {
       sh.getRange(W.TODO_START, W.textCol(yd), n, 1).setValues(texts);
-      sortTodos_(sh, W.TODO_START, W.checkCol(yd));
+      sortTodos_(sh, W.TODO_START, W.checkCol(yd), W.memoCol(yd));
       archiveDayLive_(y); // 전날 날짜로 FALSE + 이월
     }
   }
@@ -151,15 +155,19 @@ function carryOver_() {
   if (td >= 0 && items.length) {
     const range = sh.getRange(W.TODO_START, W.checkCol(td), n, 3);
     const vals = range.getValues(), disp = range.getDisplayValues();
+    const memoR = memoRange_(sh, W.TODO_START, W.memoCol(td));
+    const memos = memoR.getValues();
     const rows = vals.map(function (r, i) { return [r[0], disp[i][1], r[2]]; });
     overflow = [];
     items.forEach(function (it) {
       const free = rows.findIndex(function (r) { return !String(r[2]).trim() && !String(r[1]).trim(); });
       if (free < 0) { overflow.push(it); return; }
       rows[free] = [false, it.time, C.CARRIED + it.text];
+      memos[free] = [it.memo || ''];
     });
     range.setValues(rows);
-    sortTodos_(sh, W.TODO_START, W.checkCol(td));
+    memoR.setValues(memos);
+    sortTodos_(sh, W.TODO_START, W.checkCol(td), W.memoCol(td));
     archiveDayLive_(today);
   }
 

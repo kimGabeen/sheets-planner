@@ -64,9 +64,10 @@ function bootData_() {
 function webWeekData_() {
   const L = WEEKLY, sh = sheet_(CONFIG.SHEETS.WEEKLY);
   const mon = weeklyMonday_();
-  const range = sh.getRange(1, 1, L.MOOD_MEMO, L.HABIT_PCT_COL);
+  const cols = Math.min(sh.getMaxColumns(), L.LAST_COL); // setup 전이라 메모 열이 없어도 동작
+  const range = sh.getRange(1, 1, L.MOOD_MEMO, cols);
   const vals = range.getValues(), disp = range.getDisplayValues();
-  const v = function (r, c) { return vals[r - 1][c - 1]; };
+  const v = function (r, c) { return c <= cols ? vals[r - 1][c - 1] : ''; };
   const dv = function (r, c) { return String(disp[r - 1][c - 1]).trim(); };
 
   const byDate = scheduleByDate_(readEvents_());
@@ -77,7 +78,7 @@ function webWeekData_() {
     const todos = [];
     for (let i = 0; i < CONFIG.TODO_ROWS; i++) {
       const r = L.TODO_START + i;
-      todos.push([v(r, c) === true, dv(r, L.timeCol(d)), String(v(r, L.textCol(d))).trim()]);
+      todos.push([v(r, c) === true, dv(r, L.timeCol(d)), String(v(r, L.textCol(d))).trim(), String(v(r, L.memoCol(d)))]);
     }
     days.push({
       key: key,
@@ -120,7 +121,7 @@ function scheduleByDate_(rows) {
     const index = count[ck] = count[ck] === undefined ? 0 : count[ck] + 1;
     if (kind === 'memo' && r[5] === '연동') return;
     const p = parseMemoText_(r[2]);
-    entry.items.push({ kind: kind, text: r[2], title: p.title, start: p.start, end: p.end,
+    entry.items.push({ kind: kind, text: r[2], title: p.title, start: p.start, end: p.end, memo: String(r[6] || ''),
       ref: { kind: kind, index: index, text: r[2] } });
   });
   return out;
@@ -140,7 +141,9 @@ function eventRowsAround_(date) {
   return sortEvents_(rows.filter(function (r) { return r[1] !== CONFIG.EVENT_TYPE.CAL || !inGrid(r[0]); })
     .map(function (r) {
       if (r[1] !== CONFIG.EVENT_TYPE.MEMO || !r[4] || !inGrid(r[0])) return r;
-      return r.slice(0, 5).concat([extra.ids[r[4]] ? '연동' : '']);
+      const copy = r.slice();
+      copy[5] = extra.ids[r[4]] ? '연동' : '';
+      return copy;
     }).concat(extra.rows));
 }
 
@@ -239,22 +242,25 @@ function mirrorToToday_(d) {
   copyBlocks_(sheet_(CONFIG.SHEETS.WEEKLY), sheet_(CONFIG.SHEETS.TODAY), todayBlocks_(d), 'w');
 }
 
-/** 할 일 10줄 저장 → 정렬된 결과 반환 */
+/** 할 일 10줄 저장 [체크, 시간, 내용, 메모] → 정렬된 결과 반환 (메모는 같은 줄 숨김 칸) */
 function webSetTodos(key, rows) {
   return withLock_(function () {
     const L = WEEKLY, sh = sheet_(CONFIG.SHEETS.WEEKLY), d = webDayIndex_(key);
     const clean = [];
     for (let i = 0; i < CONFIG.TODO_ROWS; i++) {
       const r = rows[i] || [];
-      clean.push([r[0] === true, String(r[1] || '').trim(), String(r[2] || '').trim()]);
+      const text = String(r[2] || '').trim();
+      clean.push([r[0] === true, String(r[1] || '').trim(), text, text ? String(r[3] || '').trim() : '']);
     }
-    sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 3).setValues(clean);
-    sortTodos_(sh, L.TODO_START, L.checkCol(d));
+    sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 3).setValues(clean.map(function (r) { return r.slice(0, 3); }));
+    memoRange_(sh, L.TODO_START, L.memoCol(d)).setValues(clean.map(function (r) { return [r[3]]; }));
+    sortTodos_(sh, L.TODO_START, L.checkCol(d), L.memoCol(d));
     mirrorToToday_(d);
     archiveDayLive_(dateOnly_(key));
     const range = sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 3);
     const vals = range.getValues(), disp = range.getDisplayValues();
-    return vals.map(function (r, i) { return [r[0] === true, String(disp[i][1]).trim(), String(r[2]).trim()]; });
+    const memos = memoRange_(sh, L.TODO_START, L.memoCol(d)).getValues();
+    return vals.map(function (r, i) { return [r[0] === true, String(disp[i][1]).trim(), String(r[2]).trim(), String(memos[i][0])]; });
   });
 }
 
@@ -382,8 +388,8 @@ function withViews_(res, y, m) {
   return res;
 }
 
-/** 캘린더 ID로 연동된 메모 줄들 고치기 (text가 null이면 삭제) */
-function updateLinkedMemos_(id, text) {
+/** 캘린더 ID로 연동된 메모 줄들 고치기 (text가 null이면 삭제), memo = 숨김 메모 */
+function updateLinkedMemos_(id, text, memo) {
   if (!id) return;
   const rows = readEvents_();
   let changed = false;
@@ -391,7 +397,7 @@ function updateLinkedMemos_(id, text) {
     if (r[1] !== CONFIG.EVENT_TYPE.MEMO || r[4] !== id) return true;
     changed = true;
     if (text === null) return false;
-    r[2] = text; r[3] = eventSortKey_(text);
+    r[2] = text; r[3] = eventSortKey_(text); r[6] = memo || '';
     return true;
   });
   if (changed) { writeEvents_(out); refreshMonthMemos_(); }
@@ -412,32 +418,33 @@ function webSaveItem(key, ref, item, y, m) {
       const shape = eventShape_(date, item.start, item.end, item.title);
       if (shape.error) return withViews_({ ok: false, message: shape.error }, y, m);
       const text = itemText_(shape);
+      const memo = String(item.memo || '').trim(); // 숨김 메모 (목록엔 안 보임)
 
       if (!ref) {
-        const cal = createCalendarEvent_(date, item.start, item.end, item.title); // 안에서 캘린더 다시 불러옴
+        const cal = createCalendarEvent_(date, item.start, item.end, item.title, memo); // 안에서 캘린더 다시 불러옴
         if (!cal.ok) return withViews_({ ok: false, message: cal.message }, y, m);
         const rows = readEvents_();
-        rows.push([date, CONFIG.EVENT_TYPE.MEMO, text, eventSortKey_(text), cal.id, '연동']);
+        rows.push([date, CONFIG.EVENT_TYPE.MEMO, text, eventSortKey_(text), cal.id, '연동', memo]);
         writeEvents_(rows);
         refreshMonthMemos_();
         res = { ok: true, message: '저장됨 ✓ · 구글 캘린더에도 추가' };
       } else if (ref.kind === 'cal') {
         const row = findItemRow_(eventRowsAround_(date), date, ref);
-        const up = updateCalendarEvent_(row[4], date, item.start, item.end, item.title, calendarTitles_(row[2]));
+        const up = updateCalendarEvent_(row[4], date, item.start, item.end, item.title, calendarTitles_(row[2]), memo);
         if (!up.ok) throw new Error(up.found ? up.message : '구글 캘린더에서 찾지 못했어요 (이미 지워졌을 수 있어요)');
-        updateLinkedMemos_(row[4], text);
+        updateLinkedMemos_(row[4], text, memo);
         res = { ok: true, message: '수정됨 ✓ · 구글 캘린더에도 반영' };
       } else if (ref.kind === 'memo') {
         let id = findItemRow_(readEvents_(), date, ref)[4], msg = '수정됨 ✓';
         if (id) {
-          const up = updateCalendarEvent_(id, date, item.start, item.end, item.title, []);
+          const up = updateCalendarEvent_(id, date, item.start, item.end, item.title, [], memo);
           if (up.ok) msg += ' · 구글 캘린더에도 반영';
           else if (!up.found) { id = ''; msg += ' · 구글 캘린더에서 이미 지워진 일정이라 앱에만 저장했어요'; }
           else throw new Error(up.message);
         }
         const rows = readEvents_();
         const old = findItemRow_(rows, date, ref);
-        old[2] = text; old[3] = eventSortKey_(text); old[4] = id; old[5] = id ? '연동' : '';
+        old[2] = text; old[3] = eventSortKey_(text); old[4] = id; old[5] = id ? '연동' : ''; old[6] = memo;
         writeEvents_(rows);
         refreshMonthMemos_();
         res = { ok: true, message: msg };
