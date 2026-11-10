@@ -257,7 +257,7 @@ function applyWeeklyRules_(sh, theme, pale) {
 
 /** 아직 예전 레이아웃인지 */
 function needsMigration_() {
-  return PropertiesService.getDocumentProperties().getProperty('LAYOUT_VERSION') !== CONFIG.LAYOUT_VERSION;
+  return props_().getProperty('LAYOUT_VERSION') !== CONFIG.LAYOUT_VERSION;
 }
 
 /** 시트 내용·서식·검증·숨김 열을 모두 비움 (마이그레이션 전용) */

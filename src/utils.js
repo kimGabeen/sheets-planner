@@ -3,9 +3,36 @@
  * 여러 파일에서 같이 쓰는 작은 도우미 함수 모음 (날짜, 범위, 서식, 상태 표시)
  */
 
-/** 현재 스프레드시트 */
+/**
+ * 현재 스프레드시트
+ * 시트·트리거에서는 연결된 시트, 웹앱처럼 열린 시트가 없을 때는 setup()이 저장한 ID로 연다.
+ */
 function ss_() {
-  return SpreadsheetApp.getActiveSpreadsheet();
+  const active = SpreadsheetApp.getActiveSpreadsheet();
+  if (active) return active;
+  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
+  if (!id) throw new Error('시트에서 setup()을 먼저 실행해 주세요');
+  return SpreadsheetApp.openById(id);
+}
+
+/**
+ * 플래너 상태 저장소 (넘기기 날짜, 레이아웃 버전 등)
+ * 웹앱에서도 같은 값을 보도록 스크립트 속성을 쓰고, 예전 문서 속성 값은 한 번 옮겨 온다.
+ */
+function props_() {
+  const sp = PropertiesService.getScriptProperties();
+  if (!sp.getProperty('PROPS_MOVED')) {
+    let dp = null;
+    try { dp = PropertiesService.getDocumentProperties(); } catch (err) { dp = null; }
+    if (dp) {
+      ['LAYOUT_VERSION', 'CARRY_DONE', 'CARRY_OVERFLOW'].forEach(function (k) {
+        const v = dp.getProperty(k);
+        if (v !== null && sp.getProperty(k) === null) sp.setProperty(k, v);
+      });
+      sp.setProperty('PROPS_MOVED', '1');
+    }
+  }
+  return sp;
 }
 
 /** 이름으로 시트 가져오기 */
@@ -187,9 +214,23 @@ function setStatus_(key, msg) {
   if (sh && row) sh.getRange(row, 2).setValue(stamp_() + '  ' + msg);
 }
 
-/** 문서 잠금을 잡고 함수 실행 (동시 실행 방지) */
+/** 행 번호 목록(오름차순)을 연속 구간끼리 묶어 아래쪽부터 삭제 */
+function deleteRowList_(sh, rows) {
+  if (!rows.length) return;
+  // 빈 행 여유 확보 (고정 행만 남기고 전부 지우는 오류 방지)
+  if (sh.getMaxRows() - sh.getLastRow() < 5) sh.insertRowsAfter(sh.getMaxRows(), 50);
+  for (let i = rows.length - 1; i >= 0;) {
+    const end = rows[i];
+    let start = end;
+    while (i > 0 && rows[i - 1] === start - 1) { i--; start--; }
+    sh.deleteRows(start, end - start + 1);
+    i--;
+  }
+}
+
+/** 스크립트 잠금을 잡고 함수 실행 (시트 편집·트리거·웹앱 동시 실행 방지) */
 function withLock_(fn) {
-  const lock = LockService.getDocumentLock();
+  const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     return fn();

@@ -78,7 +78,7 @@ function carryEnabled_() {
  * 3) 오늘 칸의 빈 줄에 "↪ 할 일"로 복사 (시간도 같이), 자리가 없으면 오늘 시트 "넘어온 일"로
  */
 function carryOver_() {
-  const props = PropertiesService.getDocumentProperties();
+  const props = props_();
   const today = today_(), y = addDays_(today, -1), yKey = dateKey_(y);
   if (props.getProperty('CARRY_DONE') === yKey) return ''; // 이미 처리함
   if (!carryEnabled_()) {

@@ -10,7 +10,7 @@ const THEME_PRESETS_ = '초록 #2E7D32 · 파랑 #1565C0 · 남색 #283593 · �
 function buildSettings_() {
   const sh = ensureSheet_(CONFIG.SHEETS.SETTINGS);
   const S = SETTINGS;
-  ensureSize_(sh, 30, 3);
+  ensureSize_(sh, S.CAT_START + CONFIG.TIMELINE.CATEGORY_COUNT + 2, 3);
   sh.setHiddenGridlines(true);
   sh.setColumnWidth(1, 130).setColumnWidth(2, 280).setColumnWidth(3, 260);
   sh.setRowHeights(1, 30, CONFIG.SIZE.ROW);
@@ -21,6 +21,11 @@ function buildSettings_() {
   const habitRange = sh.getRange(S.HABIT_START, 2, CONFIG.HABIT_COUNT, 1);
   if (habitRange.getValues().every(function (r) { return !r[0]; })) {
     habitRange.setValues(habitRange.getValues().map(function (r, i) { return [DEFAULT_HABITS_[i] || '']; }));
+  }
+
+  const cats = sh.getRange(S.CAT_START, 2, CONFIG.TIMELINE.CATEGORY_COUNT, 2);
+  if (cats.getValues().every(function (r) { return !r[0]; })) {
+    cats.setValues(cats.getValues().map(function (r, i) { return CONFIG.TIMELINE.DEFAULT_CATEGORIES[i] || ['', '']; }));
   }
 
   const theme = getTheme_();
@@ -64,6 +69,29 @@ function styleSettings_(sh, theme) {
     sh.getRange(S.STATUS[k], 1).setValue(labels[k]).setFontColor(CONFIG.COLORS.SUB);
     sh.getRange(S.STATUS[k], 2, 1, 2).merge().setFontColor(CONFIG.COLORS.SUB).setFontSize(9);
   });
+
+  styleHeader_(sh.getRange(S.CAT_HEADER, 1, 1, 3).merge()
+    .setValue('타임라인 카테고리 (웹앱) — 이름 | 색 코드'), theme);
+  const n = CONFIG.TIMELINE.CATEGORY_COUNT;
+  for (let i = 0; i < n; i++) {
+    sh.getRange(S.CAT_START + i, 1).setValue(i + 1).setHorizontalAlignment('center').setFontColor(CONFIG.COLORS.SUB);
+  }
+  underline_(sh.getRange(S.CAT_START, 2, n, 2));
+  // 색 코드 칸은 그 색으로 칠해서 미리보기
+  getCategories_().forEach(function (c, i) {
+    sh.getRange(S.CAT_START + i, 3).setBackground(c.color).setFontColor(CONFIG.COLORS.WHITE);
+  });
+}
+
+/** 타임라인 카테고리 목록 [{name, color}] (이름 없는 줄은 제외) */
+function getCategories_() {
+  const sh = sheet_(CONFIG.SHEETS.SETTINGS);
+  return sh.getRange(SETTINGS.CAT_START, 2, CONFIG.TIMELINE.CATEGORY_COUNT, 2).getValues()
+    .map(function (r) {
+      const color = String(r[1]).trim();
+      return { name: String(r[0]).trim(), color: /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#C9C3B6' };
+    })
+    .filter(function (c) { return c.name; });
 }
 
 /** 테마색 읽기 (형식이 틀리면 기본색) */
@@ -88,6 +116,17 @@ function habitRef_(i) {
 /** 설정 시트 수정 시: 테마색이 바뀌면 전체 다시 칠하기 */
 function onSettingsEdit_(e) {
   const S = SETTINGS;
+  // 타임라인 카테고리 색이 바뀌면 미리보기 다시 칠하기
+  if (hit_(e.range, S.CAT_START, 2, CONFIG.TIMELINE.CATEGORY_COUNT, 2)) {
+    const sh = e.range.getSheet();
+    sh.getRange(S.CAT_START, 3, CONFIG.TIMELINE.CATEGORY_COUNT, 1).setBackground(null);
+    getCategories_().forEach(function (c) {
+      const i = sh.getRange(S.CAT_START, 2, CONFIG.TIMELINE.CATEGORY_COUNT, 1).getValues()
+        .findIndex(function (r) { return String(r[0]).trim() === c.name; });
+      if (i >= 0) sh.getRange(S.CAT_START + i, 3).setBackground(c.color).setFontColor(CONFIG.COLORS.WHITE);
+    });
+    return;
+  }
   if (!hit_(e.range, S.THEME.row, S.THEME.col)) return;
   const v = String(e.range.getSheet().getRange(S.THEME.row, S.THEME.col).getValue()).trim();
   const note = e.range.getSheet().getRange(S.THEME.row, 3);

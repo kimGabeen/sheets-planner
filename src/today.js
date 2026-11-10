@@ -180,7 +180,7 @@ function refreshToday_() {
 /** 맨 아래 "넘어온 일" 칸 채우기 (오늘 날짜로 저장된 것만) */
 function renderOverflow_() {
   const sh = sheet_(CONFIG.SHEETS.TODAY), T = TODAY;
-  const saved = JSON.parse(PropertiesService.getDocumentProperties().getProperty('CARRY_OVERFLOW') || '{}');
+  const saved = JSON.parse(props_().getProperty('CARRY_OVERFLOW') || '{}');
   const items = saved.date === dateKey_(today_()) ? saved.items || [] : [];
   const vals = [];
   for (let i = 0; i < CONFIG.TODO_ROWS; i++) {

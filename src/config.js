@@ -21,6 +21,24 @@ const CONFIG = {
     ARCHIVE: '기록',
     SETTINGS: '설정',
     EVENTS: '_일정', // 숨김: 캘린더 일정 + 달력 메모 저장소
+    TIMELINE: '타임라인', // 웹앱 타임라인 기록 (날짜 | 시작 | 카테고리)
+  },
+
+  // 타임라인 (웹앱): 10분 칸, 카테고리는 설정 시트에서 변경
+  TIMELINE: {
+    SLOT_MINUTES: 10,
+    CATEGORY_COUNT: 8,
+    DEFAULT_CATEGORIES: [
+      ['공부', '#2F5D50'], ['일', '#5B8A72'], ['운동', '#E0A458'], ['휴식', '#9CC5B5'],
+      ['수면', '#7A8FA6'], ['이동', '#C9A27E'], ['기타', '#C9C3B6'],
+    ],
+  },
+
+  // 웹앱 화면
+  WEB: {
+    TITLE: '플래너',
+    // 홈 화면·탭 아이콘 (공개 저장소의 이미지)
+    ICON_URL: 'https://raw.githubusercontent.com/kimGabeen/sheets-planner/main/docs/icon-180.png',
   },
 
   // 개수
@@ -239,4 +257,6 @@ const SETTINGS = {
   PRESET_ROW: 17,
   STATUS_HEADER: 19,
   STATUS: { setup: 20, save: 21, sync: 22, week: 23, carry: 24, error: 25 },
+  CAT_HEADER: 27, // 타임라인 카테고리 (이름 | 색)
+  CAT_START: 28,
 };

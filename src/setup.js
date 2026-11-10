@@ -9,11 +9,14 @@ function setup() {
   const ss = ss_();
   ss.setSpreadsheetLocale(CONFIG.LOCALE);
   ss.setSpreadsheetTimeZone(CONFIG.TIMEZONE);
+  // 웹앱이 이 시트를 찾을 수 있게 ID 저장
+  PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', ss.getId());
 
   // 1) 데이터 시트 (있으면 그대로 둠)
   const theme = buildSettings_();
   buildEventsSheet_();
   buildArchive_(theme);
+  buildTimelineSheet_(theme);
 
   // 2) 화면 시트
   buildAllLayouts_(theme);
@@ -34,7 +37,7 @@ function setup() {
   initLastWeekSelect_();
 
   // 첫날에는 어제 미완료를 넘기지 않도록 표시만 해 둠
-  const props = PropertiesService.getDocumentProperties();
+  const props = props_();
   if (!props.getProperty('CARRY_DONE')) props.setProperty('CARRY_DONE', dateKey_(addDays_(today_(), -1)));
 
   // 5) 트리거 (중복 없이)
@@ -52,7 +55,7 @@ function buildAllLayouts_(theme) {
   buildToday_(theme);
   buildMonthly_(theme);
   buildLastWeek_(theme);
-  PropertiesService.getDocumentProperties().setProperty('LAYOUT_VERSION', CONFIG.LAYOUT_VERSION);
+  props_().setProperty('LAYOUT_VERSION', CONFIG.LAYOUT_VERSION);
   if (migrating) refreshToday_(); // 오늘 시트는 위클리에서 다시 채움
 }
 
@@ -71,7 +74,7 @@ function initDefaults_() {
 /** 시트 순서 정리 + 처음 생긴 빈 기본 시트 삭제 */
 function arrangeSheets_() {
   const ss = ss_(), S = CONFIG.SHEETS;
-  const order = [S.WEEKLY, S.TODAY, S.MONTHLY, S.LASTWEEK, S.ARCHIVE, S.SETTINGS, S.EVENTS];
+  const order = [S.WEEKLY, S.TODAY, S.MONTHLY, S.LASTWEEK, S.ARCHIVE, S.TIMELINE, S.SETTINGS, S.EVENTS];
   ss.getSheets().forEach(function (sh) {
     const n = sh.getName();
     if (order.indexOf(n) < 0 && sh.getLastRow() === 0 && /^(시트|Sheet)\d+$/.test(n)) ss.deleteSheet(sh);

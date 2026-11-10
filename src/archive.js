@@ -43,17 +43,7 @@ function replaceArchive_(keys, rows) {
   const del = readArchive_().filter(function (r) { return want[r.key + '|' + r.cat]; })
     .map(function (r) { return r.row; });
 
-  // 빈 행 여유 확보 (고정 행만 남기고 전부 지우는 오류 방지)
-  if (sh.getMaxRows() - sh.getLastRow() < 5) sh.insertRowsAfter(sh.getMaxRows(), 50);
-
-  // 연속 구간끼리 묶어 아래쪽부터 삭제
-  for (let i = del.length - 1; i >= 0;) {
-    const end = del[i];
-    let start = end;
-    while (i > 0 && del[i - 1] === start - 1) { i--; start--; }
-    sh.deleteRows(start, end - start + 1);
-    i--;
-  }
+  deleteRowList_(sh, del);
   if (rows.length) {
     const at = Math.max(sh.getLastRow(), 1) + 1;
     ensureSize_(sh, at + rows.length + 5, 6);
