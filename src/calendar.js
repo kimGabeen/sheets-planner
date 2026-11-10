@@ -158,30 +158,35 @@ function addEventFromForm_(sh, F) {
     if (!title) throw new Error('제목을 입력해 주세요');
     // 시간은 표시 글자로 읽음 (1899년 기준 시간값의 시간대 오차 방지)
     const st = parseTime_(cell('start').getDisplayValue());
-    const en = parseTime_(cell('end').getDisplayValue());
-    const allDay = !en; // 끝시간을 비우면 종일
-    const start = allDay ? null : atTime_(date, st || en);
+    const en = parseTime_(cell('end').getDisplayValue()); // 끝시간은 선택
+    // 규칙: 시작+끝 → 그 시간대 / 시작만 → 종일 + 제목 앞에 시간 / 둘 다 없음 → 종일
+    if (en && !st) throw new Error('시작시간 확인 (끝시간만 넣을 수는 없어요)');
+    const allDay = !(st && en);
+    const start = allDay ? null : atTime_(date, st);
     const end = allDay ? null : atTime_(date, en);
-    if (!allDay && !st) throw new Error('끝시간을 넣었다면 시작시간도 입력해 주세요');
-    if (!allDay && end <= start) throw new Error('끝시간이 시작시간보다 늦어야 해요');
+    if (!allDay && end <= start) {
+      out.setValue('끝시간 확인');
+      return;
+    }
+    const finalTitle = st && !en ? ('0' + st.h).slice(-2) + ':' + ('0' + st.m).slice(-2) + ' ' + title : title;
 
     // 중복 방지 ① 최근 2분 안에 같은 요청 ② 캘린더에 같은 일정 존재
     const key = 'add|' + dateKey_(date) + '|' + (st ? st.h + ':' + st.m : '') + '|' + (en ? en.h + ':' + en.m : '') + '|' + title;
     const cache = CacheService.getScriptCache();
     const cal = calendar_();
-    if (cache.get(key) || hasDuplicate_(cal, date, title, start, end)) {
+    if (cache.get(key) || hasDuplicate_(cal, date, finalTitle, start, end)) {
       out.setValue('이미 있는 일정이라 추가하지 않았어요 (중복 방지)');
       return;
     }
-    if (allDay) cal.createAllDayEvent(title, date);
-    else cal.createEvent(title, start, end);
+    if (allDay) cal.createAllDayEvent(finalTitle, date);
+    else cal.createEvent(finalTitle, start, end);
     cache.put(key, '1', 120);
 
     syncCalendar_(); // 바로 달력에 다시 불러오기
     ['date', 'start', 'end', 'title'].forEach(function (k) { cell(k).clearContent(); });
     const when = Utilities.formatDate(date, CONFIG.TIMEZONE, 'M/d') +
       (allDay ? ' 종일' : ' ' + Utilities.formatDate(start, CONFIG.TIMEZONE, 'HH:mm'));
-    out.setValue('추가됨 ✓ ' + when + ' ' + title);
+    out.setValue('추가됨 ✓ ' + when + ' ' + finalTitle);
   } catch (err) {
     out.setValue('오류: ' + err.message);
   }
