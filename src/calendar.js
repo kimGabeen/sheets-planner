@@ -10,55 +10,112 @@ function calendar_() {
   return CalendarApp.getDefaultCalendar();
 }
 
-/* ---------- _일정 시트 (캘린더 일정 + 달력 메모) ---------- */
+/* ---------- _일정 시트 (캘린더 일정 + 달력 메모 + 고정 시간표) ---------- */
+// 열: 날짜 | 구분(캘린더/메모/시간표) | 내용 | 정렬(분+1, 시간 없음 0) | 이벤트ID | 연동
+// 메모는 한 줄에 일정 하나. 캘린더에도 만든 메모는 이벤트ID를 갖고 "연동" 표시 → 일정 칸에 두 번 안 나옴
+
+const EVENT_COLS_ = 6;
 
 /** _일정 시트 만들기 (숨김) */
 function buildEventsSheet_() {
   const sh = ensureSheet_(CONFIG.SHEETS.EVENTS);
-  if (!sh.getRange(1, 1).getValue()) {
-    sh.getRange(1, 1, 1, 5).setValues([['날짜', '구분', '내용', '정렬', '이벤트ID']]);
-  }
+  ensureSize_(sh, 50, EVENT_COLS_);
+  sh.getRange(1, 1, 1, EVENT_COLS_).setValues([['날짜', '구분', '내용', '정렬', '이벤트ID', '연동']]);
   sh.getRange('A:A').setNumberFormat('yyyy-mm-dd');
   sh.hideSheet();
   return sh;
 }
 
-/** _일정 전체 읽기 → [[날짜, 구분, 내용, 정렬, ID], ...] */
+/** _일정 전체 읽기 → [[날짜, 구분, 내용, 정렬, ID, 연동], ...] */
 function readEvents_() {
   const sh = sheet_(CONFIG.SHEETS.EVENTS);
   const last = sh.getLastRow();
   if (last < 2) return [];
-  return sh.getRange(2, 1, last - 1, 5).getValues()
-    .map(function (r) { return [dateOnly_(r[0]), r[1], r[2], r[3], r[4]]; })
+  const cols = Math.min(EVENT_COLS_, sh.getMaxColumns());
+  return sh.getRange(2, 1, last - 1, cols).getValues()
+    .map(function (r) { return [dateOnly_(r[0]), r[1], r[2], Number(r[3]) || 0, r[4] || '', r[5] || '']; })
     .filter(function (r) { return r[0]; });
 }
 
-/** _일정 전체 다시 쓰기 (날짜 → 캘린더 먼저 → 시간 순 정렬) */
+/** _일정 전체 다시 쓰기 (날짜 → 시간 → 캘린더·시간표·메모 순 정렬) */
 function writeEvents_(rows) {
   const sh = sheet_(CONFIG.SHEETS.EVENTS);
-  const order = function (t) { return t === CONFIG.EVENT_TYPE.CAL ? 0 : 1; };
+  const T = CONFIG.EVENT_TYPE;
+  const order = function (t) { return t === T.CAL ? 0 : t === T.TIMETABLE ? 1 : 2; };
   rows.sort(function (a, b) {
-    return (a[0] - b[0]) || (order(a[1]) - order(b[1])) || (a[3] - b[3]);
+    return (a[0] - b[0]) || (a[3] - b[3]) || (order(a[1]) - order(b[1]));
   });
+  ensureSize_(sh, rows.length + 2, EVENT_COLS_);
   const last = sh.getLastRow();
-  if (last >= 2) sh.getRange(2, 1, last - 1, 5).clearContent();
-  if (rows.length) {
-    ensureSize_(sh, rows.length + 1, 5);
-    sh.getRange(2, 1, rows.length, 5).setValues(rows);
-  }
+  if (last >= 2) sh.getRange(2, 1, last - 1, EVENT_COLS_).clearContent();
+  if (rows.length) sh.getRange(2, 1, rows.length, EVENT_COLS_).setValues(rows);
 }
 
-/** 달력 메모 저장 (같은 날짜 메모는 덮어쓰기, 빈 값이면 삭제) */
+/** 일정 글자 앞 시간으로 정렬 값 ('15:00 스터디' → 901, 시간 없음 → 0) */
+function eventSortKey_(text) {
+  const m = String(text).match(/^(\d{1,2}):(\d{2})/);
+  return m ? +m[1] * 60 + +m[2] + 1 : 0;
+}
+
+/** 그날 메모 줄들 (정렬 순서대로) */
+function memosOf_(rows, date) {
+  const key = dateKey_(date);
+  return rows.filter(function (r) { return r[1] === CONFIG.EVENT_TYPE.MEMO && dateKey_(r[0]) === key; });
+}
+
+/**
+ * 달력 메모 저장 (먼슬리 메모 칸 기준): 칸의 각 줄 = 일정 하나
+ * 같은 글자의 예전 줄이 있으면 캘린더 연동 정보를 이어받음
+ */
 function saveMemos_(entries) {
-  const keys = {};
-  entries.forEach(function (e) { keys[dateKey_(e.date)] = true; });
-  const rows = readEvents_().filter(function (r) {
-    return !(r[1] === CONFIG.EVENT_TYPE.MEMO && keys[dateKey_(r[0])]);
-  });
+  let rows = readEvents_();
   entries.forEach(function (e) {
-    if (e.text) rows.push([e.date, CONFIG.EVENT_TYPE.MEMO, e.text, 9999, '']);
+    const old = memosOf_(rows, e.date);
+    const key = dateKey_(e.date);
+    rows = rows.filter(function (r) { return !(r[1] === CONFIG.EVENT_TYPE.MEMO && dateKey_(r[0]) === key); });
+    String(e.text || '').split(/\r?\n/).map(function (t) { return t.trim(); }).filter(String).forEach(function (t) {
+      const prev = old.find(function (r) { return r[2] === t; });
+      rows.push([e.date, CONFIG.EVENT_TYPE.MEMO, t, eventSortKey_(t), prev ? prev[4] : '', prev ? prev[5] : '']);
+    });
   });
   writeEvents_(rows);
+}
+
+/** 고정 시간표 → 기간 안 날짜별 일정 행 (학기 기간에만) */
+function timetableRows_(range) {
+  const tt = getTimetable_();
+  if (!tt.rows.length) return [];
+  let from = range.start, to = range.end;
+  if (tt.start && tt.start > from) from = tt.start;
+  if (tt.end && addDays_(tt.end, 1) < to) to = addDays_(tt.end, 1);
+  const out = [];
+  for (let d = from; d < to; d = addDays_(d, 1)) {
+    const wd = (d.getDay() + 6) % 7;
+    tt.rows.forEach(function (c) {
+      if (c.day !== wd) return;
+      const text = c.start + (c.end ? '-' + c.end : '') + ' ' + c.name;
+      out.push([d, CONFIG.EVENT_TYPE.TIMETABLE, text, eventSortKey_(text), '', '']);
+    });
+  }
+  return out;
+}
+
+/**
+ * 위클리·오늘 "일정" k번째 줄 수식 (캘린더 + 메모 + 시간표, 연동 메모는 제외)
+ * 마지막 줄은 넘치면 "+N개 더"
+ */
+function scheduleLineFormula_(dateRef, k, emptyText) {
+  const ev = CONFIG.SHEETS.EVENTS, n = CONFIG.SCHEDULE_LINES;
+  const list = 'FILTER(' + colRef_(ev, 3) + ',' + colRef_(ev, 1) + '=' + dateRef + ',' + colRef_(ev, 6) + '<>"연동")';
+  const empty = '"' + emptyText + '"';
+  if (k < n) return '=IFERROR(INDEX(' + list + ',' + k + '),' + empty + ')';
+  return '=IFERROR(LET(l,' + list + ',c,ROWS(l),IF(c>' + n + ',"+"&(c-' + (n - 1) + ')&"개 더",INDEX(l,' + n + '))),' + empty + ')';
+}
+
+/** 시간표만 다시 만들기 (설정·웹앱에서 시간표를 바꿨을 때) */
+function refreshTimetableEvents_() {
+  const rows = readEvents_().filter(function (r) { return r[1] !== CONFIG.EVENT_TYPE.TIMETABLE; });
+  writeEvents_(rows.concat(timetableRows_(syncRange_())));
 }
 
 /* ---------- 불러오기 ---------- */
@@ -83,7 +140,7 @@ function syncRange_() {
 }
 
 /**
- * 캘린더 일정 불러오기
+ * 캘린더 일정 불러오기 (+ 시간표 다시 만들기)
  * 기간 안의 기존 캘린더 행은 지우고 새로 채움 → 캘린더에서 지운 일정은 시트에서도 사라짐
  * 반환: 불러온 일정 수
  */
@@ -92,26 +149,33 @@ function syncCalendar_() {
   const events = calendar_().getEvents(range.start, range.end);
   const inRange = function (d) { return d >= range.start && d < range.end; };
   const fresh = [];
+  const ids = {};
   events.forEach(function (ev) {
     const title = ev.getTitle() || '(제목 없음)';
+    ids[ev.getId()] = true;
     if (ev.isAllDayEvent()) {
       // 여러 날 종일 일정은 날마다 한 줄씩
       const last = dateOnly_(ev.getAllDayEndDate()); // 끝 날짜는 포함 안 됨
       for (let d = dateOnly_(ev.getAllDayStartDate()); d < last; d = addDays_(d, 1)) {
-        if (inRange(d)) fresh.push([d, CONFIG.EVENT_TYPE.CAL, title, 0, ev.getId()]);
+        if (inRange(d)) fresh.push([d, CONFIG.EVENT_TYPE.CAL, title, eventSortKey_(title), ev.getId(), '']);
       }
     } else {
       const s = ev.getStartTime(), d = dateOnly_(s);
       if (inRange(d)) {
         fresh.push([d, CONFIG.EVENT_TYPE.CAL, Utilities.formatDate(s, CONFIG.TIMEZONE, 'HH:mm') + ' ' + title,
-          s.getHours() * 60 + s.getMinutes() + 1, ev.getId()]);
+          s.getHours() * 60 + s.getMinutes() + 1, ev.getId(), '']);
       }
     }
   });
   const kept = readEvents_().filter(function (r) {
+    if (r[1] === CONFIG.EVENT_TYPE.TIMETABLE) return false; // 아래에서 새로 만듦
     return r[1] !== CONFIG.EVENT_TYPE.CAL || !inRange(r[0]);
   });
-  writeEvents_(kept.concat(fresh));
+  // 캘린더에도 만든 메모: 캘린더에 아직 있으면 "연동"(일정 칸에서 숨김), 지워졌으면 다시 보이게
+  kept.forEach(function (r) {
+    if (r[1] === CONFIG.EVENT_TYPE.MEMO && r[4] && inRange(r[0])) r[5] = ids[r[4]] ? '연동' : '';
+  });
+  writeEvents_(kept.concat(fresh, timetableRows_(range)));
   setStatus_('sync', '✓ ' + fresh.length + '개 (' + dateKey_(range.start) + ' ~ ' + dateKey_(addDays_(range.end, -1)) + ')');
   return fresh.length;
 }
@@ -145,7 +209,7 @@ function hasDuplicate_(cal, date, title, start, end) {
 /**
  * 캘린더에 일정 만들기 (시트 입력칸·웹앱 공용)
  * 규칙: 시작+끝 → 그 시간대 / 시작만 → 종일 + 제목 앞에 시간 / 둘 다 없음 → 종일
- * 반환 {ok, message}. 입력이 잘못되면 Error를 던짐
+ * 반환 {ok, message, id}. 입력이 잘못되면 Error를 던짐
  */
 function createCalendarEvent_(dateValue, startText, endText, titleText) {
   const date = dateOnly_(dateValue) || today_();
@@ -168,14 +232,13 @@ function createCalendarEvent_(dateValue, startText, endText, titleText) {
   if (cache.get(key) || hasDuplicate_(cal, date, finalTitle, start, end)) {
     return { ok: false, message: '이미 있는 일정이라 추가하지 않았어요 (중복 방지)' };
   }
-  if (allDay) cal.createAllDayEvent(finalTitle, date);
-  else cal.createEvent(finalTitle, start, end);
+  const ev = allDay ? cal.createAllDayEvent(finalTitle, date) : cal.createEvent(finalTitle, start, end);
   cache.put(key, '1', 120);
 
   syncCalendar_(); // 바로 달력에 다시 불러오기
   const when = Utilities.formatDate(date, CONFIG.TIMEZONE, 'M/d') +
     (allDay ? ' 종일' : ' ' + Utilities.formatDate(start, CONFIG.TIMEZONE, 'HH:mm'));
-  return { ok: true, message: '추가됨 ✓ ' + when + ' ' + finalTitle };
+  return { ok: true, message: '추가됨 ✓ ' + when + ' ' + finalTitle, id: ev.getId() };
 }
 
 /**

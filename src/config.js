@@ -63,7 +63,7 @@ const CONFIG = {
   ARCHIVE_HEADERS: ['날짜', '구분', '항목', '완료여부', '값', '주차'],
 
   // _일정 시트의 구분 값
-  EVENT_TYPE: { CAL: '캘린더', MEMO: '메모' },
+  EVENT_TYPE: { CAL: '캘린더', MEMO: '메모', TIMETABLE: '시간표' },
 
   // 트리거 시간
   TRIGGER: {
@@ -259,4 +259,10 @@ const SETTINGS = {
   STATUS: { setup: 20, save: 21, sync: 22, week: 23, carry: 24, error: 25 },
   CAT_HEADER: 27, // 타임라인 카테고리 (이름 | 색)
   CAT_START: 28,
+  TT_HEADER: 37, // 고정 시간표 (요일 | 시작 | 끝 | 이름)
+  TT_SEM_START: 38, // 학기 시작 (B)
+  TT_SEM_END: 39, // 학기 종료 (B)
+  TT_LABEL: 40,
+  TT_START: 41,
+  TT_COUNT: 15,
 };

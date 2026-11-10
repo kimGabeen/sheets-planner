@@ -42,9 +42,8 @@ function buildToday_(theme) {
   // 오늘 일정 (자동, 읽기 전용)
   header(T.SCHED_HEADER, '오늘 일정');
   for (let k = 1; k <= CONFIG.SCHEDULE_LINES; k++) {
-    sh.getRange(T.SCHED_START + k - 1, 1, 1, 3).merge().setFormula(
-      '=IFERROR(INDEX(FILTER(' + colRef_(ev, 3) + ',' + colRef_(ev, 1) + '=' + date + '),' + k + '),' +
-      (k === 1 ? '"일정 없음"' : '""') + ')').setFontColor(C.SUB).setFontSize(10);
+    sh.getRange(T.SCHED_START + k - 1, 1, 1, 3).merge().setFormula(scheduleLineFormula_(date, k, k === 1 ? '일정 없음' : ''))
+      .setFontColor(C.SUB).setFontSize(10);
   }
 
   // 오늘 할 일 10줄: 체크 | 시간(선택) | 내용

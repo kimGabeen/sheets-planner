@@ -240,7 +240,9 @@ function refreshMonthMemos_() {
   const start = monthGridStart_(ym);
   const memos = {};
   readEvents_().forEach(function (r) {
-    if (r[1] === CONFIG.EVENT_TYPE.MEMO) memos[dateKey_(r[0])] = r[2];
+    if (r[1] !== CONFIG.EVENT_TYPE.MEMO) return;
+    const k = dateKey_(r[0]);
+    memos[k] = memos[k] ? memos[k] + '\n' + r[2] : r[2]; // 한 줄에 일정 하나
   });
   for (let w = 0; w < L.WEEKS; w++) {
     const row = [];

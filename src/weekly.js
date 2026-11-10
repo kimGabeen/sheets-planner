@@ -116,8 +116,7 @@ function buildWeeklyDays_(sh, theme, pale) {
 
     // 3) 일정 (먼슬리와 같은 데이터, 읽기 전용 회색)
     for (let k = 1; k <= CONFIG.SCHEDULE_LINES; k++) {
-      sh.getRange(L.SCHED_START + k - 1, c, 1, S).merge().setFormula(
-        '=IFERROR(INDEX(FILTER(' + colRef_(ev, 3) + ',' + colRef_(ev, 1) + '=' + date + '),' + k + '),"")')
+      sh.getRange(L.SCHED_START + k - 1, c, 1, S).merge().setFormula(scheduleLineFormula_(date, k, ''))
         .setFontColor(C.SUB).setFontSize(9).setWrap(false);
     }
 

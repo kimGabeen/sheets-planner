@@ -10,9 +10,9 @@ const THEME_PRESETS_ = '초록 #2E7D32 · 파랑 #1565C0 · 남색 #283593 · �
 function buildSettings_() {
   const sh = ensureSheet_(CONFIG.SHEETS.SETTINGS);
   const S = SETTINGS;
-  ensureSize_(sh, S.CAT_START + CONFIG.TIMELINE.CATEGORY_COUNT + 2, 3);
+  ensureSize_(sh, S.TT_START + S.TT_COUNT + 2, 4);
   sh.setHiddenGridlines(true);
-  sh.setColumnWidth(1, 130).setColumnWidth(2, 280).setColumnWidth(3, 260);
+  sh.setColumnWidth(1, 130).setColumnWidth(2, 280).setColumnWidth(3, 260).setColumnWidth(4, 200);
   sh.setRowHeights(1, 30, CONFIG.SIZE.ROW);
 
   // 처음 만들 때만 기본값 채우기
@@ -81,6 +81,76 @@ function styleSettings_(sh, theme) {
   getCategories_().forEach(function (c, i) {
     sh.getRange(S.CAT_START + i, 3).setBackground(c.color).setFontColor(CONFIG.COLORS.WHITE);
   });
+
+  // 고정 시간표 (수업용): 학기 기간 + 요일 | 시작 | 끝 | 이름
+  styleHeader_(sh.getRange(S.TT_HEADER, 1, 1, 4).merge()
+    .setValue('고정 시간표 — 학기 기간에만 위클리·오늘 "일정"에 매주 표시'), theme);
+  [[S.TT_SEM_START, '학기 시작'], [S.TT_SEM_END, '학기 종료']].forEach(function (a) {
+    sh.getRange(a[0], 1).setValue(a[1]).setFontWeight('bold');
+    dateInput_(sh.getRange(a[0], 2));
+    sh.getRange(a[0], 3).setValue('비우면 기간 제한 없음').setFontColor(CONFIG.COLORS.SUB).setFontSize(9);
+  });
+  sh.getRange(S.TT_LABEL, 1, 1, 4).setValues([['요일', '시작', '끝', '이름']])
+    .setFontColor(CONFIG.COLORS.SUB).setFontSize(9);
+  sh.getRange(S.TT_START, 1, S.TT_COUNT, 1).setDataValidation(SpreadsheetApp.newDataValidation()
+    .requireValueInList(['월', '화', '수', '목', '금', '토', '일'], true).build()).setHorizontalAlignment('center');
+  sh.getRange(S.TT_START, 2, S.TT_COUNT, 2).setNumberFormat('@').setHorizontalAlignment('center');
+  underline_(sh.getRange(S.TT_START, 1, S.TT_COUNT, 4));
+}
+
+const WEEKDAY_NAMES_ = ['월', '화', '수', '목', '금', '토', '일'];
+
+/** 고정 시간표 읽기 → {start, end, rows:[{day(0=월), start, end, name}]} (시간순) */
+function getTimetable_() {
+  const sh = sheet_(CONFIG.SHEETS.SETTINGS), S = SETTINGS;
+  if (!sh || sh.getMaxColumns() < 4 || sh.getMaxRows() < S.TT_START + S.TT_COUNT - 1) return { start: null, end: null, rows: [] };
+  const rows = [];
+  sh.getRange(S.TT_START, 1, S.TT_COUNT, 4).getDisplayValues().forEach(function (r) {
+    const day = WEEKDAY_NAMES_.indexOf(String(r[0]).trim());
+    const st = normTime_(r[1]), name = String(r[3]).trim();
+    if (day < 0 || !st || !name) return;
+    rows.push({ day: day, start: st, end: normTime_(r[2]), name: name });
+  });
+  rows.sort(function (a, b) { return (a.day - b.day) || (a.start < b.start ? -1 : a.start > b.start ? 1 : 0); });
+  return {
+    start: dateOnly_(sh.getRange(S.TT_SEM_START, 2).getValue()),
+    end: dateOnly_(sh.getRange(S.TT_SEM_END, 2).getValue()),
+    rows: rows,
+  };
+}
+
+/** 고정 시간표 저장 (start·end는 Date 또는 null) */
+function setTimetable_(tt) {
+  const sh = sheet_(CONFIG.SHEETS.SETTINGS), S = SETTINGS;
+  if (tt.rows.length > S.TT_COUNT) throw new Error('시간표는 최대 ' + S.TT_COUNT + '개예요');
+  sh.getRange(S.TT_SEM_START, 2).setValue(tt.start || '');
+  sh.getRange(S.TT_SEM_END, 2).setValue(tt.end || '');
+  const vals = [];
+  for (let i = 0; i < S.TT_COUNT; i++) {
+    const r = tt.rows[i];
+    vals.push(r ? [WEEKDAY_NAMES_[r.day], r.start, r.end || '', r.name] : ['', '', '', '']);
+  }
+  sh.getRange(S.TT_START, 1, S.TT_COUNT, 4).setValues(vals);
+}
+
+/**
+ * 습관 목록 저장 (웹앱 편집): list = [{name, from(예전 순서 번호 또는 null)}]
+ * 위클리 체크도 습관을 따라 함께 옮김. 기록 시트의 예전 기록은 건드리지 않음
+ */
+function setHabits_(list) {
+  if (list.length > CONFIG.HABIT_COUNT) throw new Error('습관은 최대 ' + CONFIG.HABIT_COUNT + '개예요');
+  const set = sheet_(CONFIG.SHEETS.SETTINGS), W = WEEKLY, n = CONFIG.HABIT_COUNT;
+  const weekly = sheet_(CONFIG.SHEETS.WEEKLY);
+  const checks = weekly.getRange(W.HABIT_START, W.HABIT_DAY_COL, n, 7).getValues();
+  const names = [], moved = [];
+  for (let i = 0; i < n; i++) {
+    const h = list[i];
+    names.push([h ? String(h.name).trim() : '']);
+    const from = h && h.from !== null && h.from !== undefined ? Number(h.from) : -1;
+    moved.push(from >= 0 && from < n ? checks[from].map(function (v) { return v === true; }) : [false, false, false, false, false, false, false]);
+  }
+  set.getRange(SETTINGS.HABIT_START, 2, n, 1).setValues(names);
+  weekly.getRange(W.HABIT_START, W.HABIT_DAY_COL, n, 7).setValues(moved);
 }
 
 /** 타임라인 카테고리 목록 [{name, color}] (이름 없는 줄은 제외) */
@@ -116,6 +186,11 @@ function habitRef_(i) {
 /** 설정 시트 수정 시: 테마색이 바뀌면 전체 다시 칠하기 */
 function onSettingsEdit_(e) {
   const S = SETTINGS;
+  // 고정 시간표가 바뀌면 일정 칸 다시 만들기
+  if (hit_(e.range, S.TT_SEM_START, 1, S.TT_START + S.TT_COUNT - S.TT_SEM_START, 4)) {
+    refreshTimetableEvents_();
+    return;
+  }
   // 타임라인 카테고리 색이 바뀌면 미리보기 다시 칠하기
   if (hit_(e.range, S.CAT_START, 2, CONFIG.TIMELINE.CATEGORY_COUNT, 2)) {
     const sh = e.range.getSheet();
