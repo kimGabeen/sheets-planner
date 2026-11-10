@@ -228,13 +228,43 @@ function deleteRowList_(sh, rows) {
   }
 }
 
-/** 스크립트 잠금을 잡고 함수 실행 (시트 편집·트리거·웹앱 동시 실행 방지) */
-function withLock_(fn) {
+/**
+ * 스크립트 잠금을 잡고 함수 실행 (시트 편집·트리거·웹앱 동시 실행 방지)
+ * readOnly가 아니면 끝난 뒤 서버 캐시를 무효화 (시트가 바뀌었을 수 있으므로)
+ */
+function withLock_(fn, readOnly) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
-    return fn();
+    const out = fn();
+    if (!readOnly) bumpCache_();
+    return out;
   } finally {
     lock.releaseLock();
   }
+}
+
+/* ---------- 서버 캐시 (웹앱이 자주 읽는 데이터) ---------- */
+// 캐시 키에 "버전"을 붙이고, 쓰기가 일어나면 버전만 바꿔 이전 캐시를 한 번에 버림
+
+/** 캐시 버전 올리기 (모든 캐시 무효화) */
+function bumpCache_() {
+  try { CacheService.getScriptCache().put('ver', String(Date.now()), 21600); } catch (err) { /* 캐시 실패해도 동작 */ }
+}
+
+/** 캐시에 있으면 그 값, 없으면 make()로 만들어 저장 (10분) */
+function cached_(name, make) {
+  let cache = null, key = '';
+  try {
+    cache = CacheService.getScriptCache();
+    key = name + '|' + (cache.get('ver') || '0');
+    const hit = cache.get(key);
+    if (hit) return JSON.parse(hit);
+  } catch (err) { cache = null; }
+  const value = make();
+  try {
+    const json = JSON.stringify(value);
+    if (cache && json.length < 95000) cache.put(key, json, 600);
+  } catch (err) { /* 너무 크거나 실패하면 캐시 안 함 */ }
+  return value;
 }

@@ -16,7 +16,7 @@ function buildToday_(theme) {
   resetLayout_(sh);
   sh.setHiddenGridlines(true);
   sh.getRange(1, 1, sh.getMaxRows(), 3).setFontSize(11).setVerticalAlignment('middle');
-  sh.setColumnWidth(1, 48).setColumnWidth(2, 58).setColumnWidth(3, 230);
+  sh.setColumnWidth(1, 48).setColumnWidth(2, 84).setColumnWidth(3, 210);
   sh.setRowHeights(1, T.LAST_ROW + 1, CONFIG.SIZE.TODAY_ROW);
   sh.setRowHeight(T.DATE_ROW, 48);
   sh.setFrozenRows(1);

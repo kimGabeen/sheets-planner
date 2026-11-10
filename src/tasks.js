@@ -14,6 +14,37 @@ function normTime_(text) {
   }
 }
 
+/** 시간 범위 글자('11-13', '11:00~13:00', '1100-1300', '15:00') → 'HH:mm' 또는 'HH:mm-HH:mm' (아니면 '') */
+function normRange_(text) {
+  const s = String(text || '').trim();
+  if (!s) return '';
+  const parts = s.split(/\s*[-~–]\s*/);
+  if (parts.length === 1) return normTime_(s);
+  if (parts.length !== 2) return '';
+  const a = normTime_(parts[0]), b = normTime_(parts[1]);
+  if (a && !parts[1]) return a;
+  return a && b && b > a ? a + '-' + b : '';
+}
+
+/** 시간 범위의 시작 'HH:mm' (정렬용) */
+function rangeStart_(text) {
+  return normRange_(text).slice(0, 5);
+}
+
+/** 내용 앞이나 뒤에 적은 시간 범위를 떼어 냄 ('11-13 회의' → {time: '11:00-13:00', text: '회의'}), 없으면 null */
+function splitTimeFromText_(text) {
+  const R = '(\\d{1,2}(?::?\\d{2})?\\s*[-~–]\\s*\\d{1,2}(?::?\\d{2})?)';
+  const tries = [new RegExp('^' + R + '\\s+(.+)$'), new RegExp('^(.+?)\\s+' + R + '$')];
+  for (let k = 0; k < tries.length; k++) {
+    const m = String(text).trim().match(tries[k]);
+    if (!m) continue;
+    const range = k === 0 ? m[1] : m[2], rest = k === 0 ? m[2] : m[1];
+    const t = normRange_(range);
+    if (t.length === 11) return { time: t, text: rest.trim() }; // 시작·끝 둘 다 있을 때만
+  }
+  return null;
+}
+
 /** 전날 칸에 남은 "미완 →" 할 일인지 */
 function isMissed_(text) {
   return String(text).trim().indexOf(CONFIG.CARRY.MISSED.trim()) === 0;
@@ -35,7 +66,7 @@ function stripCarry_(text) {
 
 /**
  * 할 일 10줄 정렬 (row, col = 체크박스 칸의 첫 줄)
- * 순서: ① 체크 안 된 일 중 시간 있는 것(시간순) ② 시간 없는 것(입력 순)
+ * 순서: ① 체크 안 된 일 중 시간 있는 것(시작 시간순) ② 시간 없는 것(입력 순)
  *       ③ 체크된 일·"미완 →" 일 ④ 빈 줄
  * 순서가 그대로면 쓰지 않음. 반환: 바뀌었는지
  */
@@ -44,9 +75,11 @@ function sortTodos_(sh, row, col) {
   const range = sh.getRange(row, col, n, 3);
   const vals = range.getValues(), disp = range.getDisplayValues();
   const items = vals.map(function (r, i) {
-    const raw = String(disp[i][1]).trim();
-    return { done: r[0] === true, time: normTime_(raw) || raw, sortTime: normTime_(raw),
-      text: String(r[2]).trim(), i: i };
+    let raw = String(disp[i][1]).trim(), text = String(r[2]).trim();
+    // 시간 칸이 비어 있고 내용에 '11-13' 같은 범위가 있으면 시간으로 옮김
+    const split = !raw && text ? splitTimeFromText_(text) : null;
+    if (split) { raw = split.time; text = split.text; }
+    return { done: r[0] === true, time: normRange_(raw) || raw, sortTime: rangeStart_(raw), text: text, i: i };
   });
   const group = function (it) {
     if (!it.text) return 3;
@@ -99,7 +132,7 @@ function carryOver_() {
       const t = String(r[2]).trim();
       if (!t || r[0] === true || isMissed_(t)) return;
       const name = stripCarry_(t);
-      items.push({ time: normTime_(disp[i][1]), text: name });
+      items.push({ time: normRange_(disp[i][1]), text: name });
       texts[i][0] = C.MISSED + name;
     });
     if (items.length) {

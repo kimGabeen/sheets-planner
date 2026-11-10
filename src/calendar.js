@@ -40,15 +40,23 @@ function readEvents_() {
 /** _일정 전체 다시 쓰기 (날짜 → 시간 → 캘린더·시간표·메모 순 정렬) */
 function writeEvents_(rows) {
   const sh = sheet_(CONFIG.SHEETS.EVENTS);
-  const T = CONFIG.EVENT_TYPE;
-  const order = function (t) { return t === T.CAL ? 0 : t === T.TIMETABLE ? 1 : 2; };
-  rows.sort(function (a, b) {
-    return (a[0] - b[0]) || (a[3] - b[3]) || (order(a[1]) - order(b[1]));
-  });
+  sortEvents_(rows);
   ensureSize_(sh, rows.length + 2, EVENT_COLS_);
   const last = sh.getLastRow();
   if (last >= 2) sh.getRange(2, 1, last - 1, EVENT_COLS_).clearContent();
   if (rows.length) sh.getRange(2, 1, rows.length, EVENT_COLS_).setValues(rows);
+}
+
+/** _일정 행 정렬 (날짜 → 시간 → 공휴일·캘린더·시간표·메모 순), 같으면 원래 순서 유지 */
+function sortEvents_(rows) {
+  const T = CONFIG.EVENT_TYPE;
+  const order = function (t) { return t === T.HOLIDAY ? -1 : t === T.CAL ? 0 : t === T.TIMETABLE ? 1 : 2; };
+  rows.forEach(function (r, i) { r._i = i; });
+  rows.sort(function (a, b) {
+    return (a[0] - b[0]) || (a[3] - b[3]) || (order(a[1]) - order(b[1])) || (a._i - b._i);
+  });
+  rows.forEach(function (r) { delete r._i; });
+  return rows;
 }
 
 /** 일정 글자 앞 시간으로 정렬 값 ('15:00 스터디' → 901, 시간 없음 → 0) */
@@ -101,12 +109,14 @@ function timetableRows_(range) {
 }
 
 /**
- * 위클리·오늘 "일정" k번째 줄 수식 (캘린더 + 메모 + 시간표, 연동 메모는 제외)
+ * 위클리·오늘 "일정" k번째 줄 수식 (캘린더 + 메모 + 시간표, 연동 메모·공휴일은 제외)
  * 마지막 줄은 넘치면 "+N개 더"
  */
 function scheduleLineFormula_(dateRef, k, emptyText) {
   const ev = CONFIG.SHEETS.EVENTS, n = CONFIG.SCHEDULE_LINES;
-  const list = 'FILTER(' + colRef_(ev, 3) + ',' + colRef_(ev, 1) + '=' + dateRef + ',' + colRef_(ev, 6) + '<>"연동")';
+  // 공휴일은 날짜 표시용이라 일정 목록에서 뺌
+  const list = 'FILTER(' + colRef_(ev, 3) + ',' + colRef_(ev, 1) + '=' + dateRef + ',' + colRef_(ev, 6) + '<>"연동",' +
+    colRef_(ev, 2) + '<>"' + CONFIG.EVENT_TYPE.HOLIDAY + '")';
   const empty = '"' + emptyText + '"';
   if (k < n) return '=IFERROR(INDEX(' + list + ',' + k + '),' + empty + ')';
   return '=IFERROR(LET(l,' + list + ',c,ROWS(l),IF(c>' + n + ',"+"&(c-' + (n - 1) + ')&"개 더",INDEX(l,' + n + '))),' + empty + ')';
@@ -120,11 +130,11 @@ function refreshTimetableEvents_() {
 
 /* ---------- 불러오기 ---------- */
 
-/** 불러올 기간: 이번 달 1일 ~ 다음 달 말 + 먼슬리에서 보는 달 + 위클리 주 */
+/** 불러올 기간: 이번 달 ~ 다음 달의 6주 달력 전체 + 먼슬리에서 보는 달 + 위클리 주 */
 function syncRange_() {
   const now = today_();
-  let start = new Date(now.getFullYear(), now.getMonth(), 1);
-  let end = new Date(now.getFullYear(), now.getMonth() + 1 + CONFIG.CALENDAR_MONTHS_AHEAD, 1);
+  let start = mondayOf_(new Date(now.getFullYear(), now.getMonth(), 1));
+  let end = addDays_(mondayOf_(new Date(now.getFullYear(), now.getMonth() + CONFIG.CALENDAR_MONTHS_AHEAD, 1)), 42);
   const ym = getMonthlyYM_();
   if (ym) {
     const gs = monthGridStart_(ym), ge = addDays_(gs, MONTHLY.WEEKS * 7);
@@ -140,44 +150,82 @@ function syncRange_() {
 }
 
 /**
- * 캘린더 일정 불러오기 (+ 시간표 다시 만들기)
+ * 기본 캘린더에서 기간 안 일정 → _일정 행들 + 이벤트 ID 목록
+ * 시간 일정은 '11:00-13:00 제목'(같은 날 끝나면), 종일 일정은 제목 그대로 (여러 날이면 날마다 한 줄)
+ */
+function calendarRows_(range) {
+  const rows = [], ids = {};
+  const inRange = function (d) { return d >= range.start && d < range.end; };
+  const hm = function (d) { return Utilities.formatDate(d, CONFIG.TIMEZONE, 'HH:mm'); };
+  calendar_().getEvents(range.start, range.end).forEach(function (ev) {
+    const title = ev.getTitle() || '(제목 없음)';
+    ids[ev.getId()] = true;
+    if (ev.isAllDayEvent()) {
+      const last = dateOnly_(ev.getAllDayEndDate()); // 끝 날짜는 포함 안 됨
+      for (let d = dateOnly_(ev.getAllDayStartDate()); d < last; d = addDays_(d, 1)) {
+        if (inRange(d)) rows.push([d, CONFIG.EVENT_TYPE.CAL, title, eventSortKey_(title), ev.getId(), '']);
+      }
+    } else {
+      const s = ev.getStartTime(), e = ev.getEndTime(), d = dateOnly_(s);
+      if (!inRange(d)) return;
+      const sameDay = dateKey_(e) === dateKey_(s) && e > s;
+      rows.push([d, CONFIG.EVENT_TYPE.CAL, hm(s) + (sameDay ? '-' + hm(e) : '') + ' ' + title,
+        s.getHours() * 60 + s.getMinutes() + 1, ev.getId(), '']);
+    }
+  });
+  return { rows: rows, ids: ids };
+}
+
+/** "대한민국의 휴일" 캘린더 (구독 안 돼 있으면 구독) — 실패하면 null */
+function holidayCalendar_() {
+  const id = CONFIG.HOLIDAY_CALENDAR_ID;
+  try {
+    return CalendarApp.getCalendarById(id) || CalendarApp.subscribeToCalendar(id);
+  } catch (err) {
+    return null;
+  }
+}
+
+/** 공휴일 행 (올해 1월 1일 ~ 내년 말), 가져오지 못하면 null */
+function holidayRows_() {
+  const cal = holidayCalendar_();
+  if (!cal) return null;
+  const y = today_().getFullYear();
+  const start = new Date(y, 0, 1), end = new Date(y + 2, 0, 1);
+  const rows = [];
+  cal.getEvents(start, end).forEach(function (ev) {
+    const last = dateOnly_(ev.getAllDayEndDate ? ev.getAllDayEndDate() : ev.getEndTime());
+    for (let d = dateOnly_(ev.getAllDayStartDate ? ev.getAllDayStartDate() : ev.getStartTime()); d < last; d = addDays_(d, 1)) {
+      rows.push([d, CONFIG.EVENT_TYPE.HOLIDAY, ev.getTitle(), 0, '', '']);
+    }
+  });
+  return rows;
+}
+
+/**
+ * 캘린더 일정 불러오기 (+ 시간표·공휴일 다시 만들기)
  * 기간 안의 기존 캘린더 행은 지우고 새로 채움 → 캘린더에서 지운 일정은 시트에서도 사라짐
  * 반환: 불러온 일정 수
  */
 function syncCalendar_() {
   const range = syncRange_();
-  const events = calendar_().getEvents(range.start, range.end);
   const inRange = function (d) { return d >= range.start && d < range.end; };
-  const fresh = [];
-  const ids = {};
-  events.forEach(function (ev) {
-    const title = ev.getTitle() || '(제목 없음)';
-    ids[ev.getId()] = true;
-    if (ev.isAllDayEvent()) {
-      // 여러 날 종일 일정은 날마다 한 줄씩
-      const last = dateOnly_(ev.getAllDayEndDate()); // 끝 날짜는 포함 안 됨
-      for (let d = dateOnly_(ev.getAllDayStartDate()); d < last; d = addDays_(d, 1)) {
-        if (inRange(d)) fresh.push([d, CONFIG.EVENT_TYPE.CAL, title, eventSortKey_(title), ev.getId(), '']);
-      }
-    } else {
-      const s = ev.getStartTime(), d = dateOnly_(s);
-      if (inRange(d)) {
-        fresh.push([d, CONFIG.EVENT_TYPE.CAL, Utilities.formatDate(s, CONFIG.TIMEZONE, 'HH:mm') + ' ' + title,
-          s.getHours() * 60 + s.getMinutes() + 1, ev.getId(), '']);
-      }
-    }
-  });
+  const cal = calendarRows_(range);
+  const holidays = holidayRows_(); // 실패하면 예전 공휴일 유지
   const kept = readEvents_().filter(function (r) {
-    if (r[1] === CONFIG.EVENT_TYPE.TIMETABLE) return false; // 아래에서 새로 만듦
-    return r[1] !== CONFIG.EVENT_TYPE.CAL || !inRange(r[0]);
+    const T = CONFIG.EVENT_TYPE;
+    if (r[1] === T.TIMETABLE) return false; // 아래에서 새로 만듦
+    if (r[1] === T.HOLIDAY) return !holidays;
+    return r[1] !== T.CAL || !inRange(r[0]);
   });
   // 캘린더에도 만든 메모: 캘린더에 아직 있으면 "연동"(일정 칸에서 숨김), 지워졌으면 다시 보이게
   kept.forEach(function (r) {
-    if (r[1] === CONFIG.EVENT_TYPE.MEMO && r[4] && inRange(r[0])) r[5] = ids[r[4]] ? '연동' : '';
+    if (r[1] === CONFIG.EVENT_TYPE.MEMO && r[4] && inRange(r[0])) r[5] = cal.ids[r[4]] ? '연동' : '';
   });
-  writeEvents_(kept.concat(fresh, timetableRows_(range)));
-  setStatus_('sync', '✓ ' + fresh.length + '개 (' + dateKey_(range.start) + ' ~ ' + dateKey_(addDays_(range.end, -1)) + ')');
-  return fresh.length;
+  writeEvents_(kept.concat(cal.rows, timetableRows_(range), holidays || []));
+  setStatus_('sync', '✓ ' + cal.rows.length + '개' + (holidays ? ' · 공휴일 ' + holidays.length + '일' : ' · 공휴일 못 가져옴') +
+    ' (' + dateKey_(range.start) + ' ~ ' + dateKey_(addDays_(range.end, -1)) + ')');
+  return cal.rows.length;
 }
 
 /* ---------- 적기 ---------- */
@@ -234,24 +282,40 @@ function eventShape_(dateValue, startText, endText, titleText) {
   };
 }
 
-/** 저장해 둔 ID로 내 캘린더 일정 찾기 (지워졌으면 null) */
-function findCalendarEvent_(id) {
-  if (!id) return null;
-  try {
-    return calendar_().getEventById(id) || null;
-  } catch (err) {
-    return null;
+/**
+ * 내 캘린더 일정 찾기: 저장해 둔 ID로 먼저, 없으면(예전 일정) 날짜 + 제목으로 (못 찾으면 null)
+ * titles = 찾을 제목 후보들
+ */
+function findCalendarEvent_(id, date, titles) {
+  const cal = calendar_();
+  if (id) {
+    try {
+      const ev = cal.getEventById(id);
+      if (ev) return ev;
+    } catch (err) { /* ID로 못 찾으면 아래에서 날짜+제목 */ }
   }
+  if (!date || !titles || !titles.length) return null;
+  const list = cal.getEventsForDay(date).filter(function (ev) { return titles.indexOf(ev.getTitle()) >= 0; });
+  return list[0] || null;
+}
+
+/** _일정 캘린더 줄 글자 → 원래 캘린더 제목 후보 ('11:00-13:00 회의' → ['회의', …]) */
+function calendarTitles_(text) {
+  const t = String(text);
+  const out = [t];
+  const m = t.match(/^\d{2}:\d{2}(?:-\d{2}:\d{2})?\s+(.+)$/);
+  if (m) out.unshift(m[1]);
+  return out;
 }
 
 /**
  * 캘린더에도 만든 일정 수정 (ID로 찾아서 제목·날짜·시간을 같은 규칙으로 바꿈)
  * 반환 {ok, found, message}. 캘린더에서 이미 지워졌으면 found=false
  */
-function updateCalendarEvent_(id, dateValue, startText, endText, titleText) {
+function updateCalendarEvent_(id, dateValue, startText, endText, titleText, oldTitles) {
   const shape = eventShape_(dateValue, startText, endText, titleText);
   if (shape.error) return { ok: false, found: true, message: shape.error };
-  const ev = findCalendarEvent_(id);
+  const ev = findCalendarEvent_(id, shape.date, oldTitles);
   if (!ev) {
     syncCalendar_(); // 남아 있던 옛 캘린더 줄 정리
     return { ok: false, found: false, message: '구글 캘린더에서 이미 지워진 일정이에요' };
@@ -263,9 +327,9 @@ function updateCalendarEvent_(id, dateValue, startText, endText, titleText) {
   return { ok: true, found: true, message: '구글 캘린더 일정도 수정' };
 }
 
-/** 캘린더에도 만든 일정 삭제 → 찾아서 지웠으면 true */
-function deleteCalendarEvent_(id) {
-  const ev = findCalendarEvent_(id);
+/** 캘린더 일정 삭제 (ID → 없으면 날짜+제목) → 찾아서 지웠으면 true */
+function deleteCalendarEvent_(id, date, oldTitles) {
+  const ev = findCalendarEvent_(id, date, oldTitles);
   if (!ev) {
     syncCalendar_(); // 남아 있던 옛 캘린더 줄 정리
     return false;

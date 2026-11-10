@@ -63,7 +63,9 @@ const CONFIG = {
   ARCHIVE_HEADERS: ['날짜', '구분', '항목', '완료여부', '값', '주차'],
 
   // _일정 시트의 구분 값
-  EVENT_TYPE: { CAL: '캘린더', MEMO: '메모', TIMETABLE: '시간표' },
+  EVENT_TYPE: { CAL: '캘린더', MEMO: '메모', TIMETABLE: '시간표', HOLIDAY: '공휴일' },
+  // 구글 공개 캘린더 "대한민국의 휴일" (개인 정보 아님)
+  HOLIDAY_CALENDAR_ID: 'ko.south_korea#holiday@group.v.calendar.google.com',
 
   // 트리거 시간
   TRIGGER: {
@@ -101,8 +103,8 @@ const CONFIG = {
     TODAY_ROW: 36,
     LABEL_COL: 70,
     CHECK_COL: 36,
-    TIME_COL: 46, // 할 일 시간 칸
-    TEXT_COL: 110,
+    TIME_COL: 66, // 할 일 시간 칸 ('11:00-13:00'도 들어가게)
+    TEXT_COL: 100,
     GAP_COL: 16,
     HABIT_NAME_COL: 120,
     HABIT_DAY_COL: 34,

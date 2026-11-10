@@ -22,12 +22,16 @@ function include_(name) {
 
 /* ---------- 읽기 ---------- */
 
-/** 처음 열 때 전체 데이터 (날짜가 바뀌었으면 넘기기·새 주 처리 먼저) */
+/**
+ * 처음 열 때 데이터 (날짜가 바뀌었으면 넘기기·새 주 처리 먼저)
+ * 처음 화면(오늘·위클리)에 필요한 것만 담고, 먼슬리·타임라인은 그 탭을 열 때 따로 받음
+ * 서버 캐시에 있으면 시트를 다시 읽지 않음 (시트가 바뀌면 캐시 무효화)
+ */
 function webBoot() {
   return withLock_(function () {
     dailyRollover_();
-    return bootData_();
-  });
+    return cached_('boot|' + dateKey_(today_()), bootData_);
+  }, true);
 }
 
 /** 캘린더 새로고침 후 전체 데이터 */
@@ -65,12 +69,7 @@ function webWeekData_() {
   const v = function (r, c) { return vals[r - 1][c - 1]; };
   const dv = function (r, c) { return String(disp[r - 1][c - 1]).trim(); };
 
-  const schedule = {};
-  readEvents_().forEach(function (r) {
-    if (r[5] === '연동') return; // 캘린더에도 있는 메모는 캘린더 쪽만 표시
-    const k = dateKey_(r[0]);
-    (schedule[k] = schedule[k] || []).push({ text: r[2], kind: eventKind_(r[1]) });
-  });
+  const byDate = scheduleByDate_(readEvents_());
   const habits = getHabits_();
   const days = [];
   for (let d = 0; d < 7 && mon; d++) {
@@ -85,7 +84,8 @@ function webWeekData_() {
       todos: todos,
       habits: habits.map(function (n, i) { return v(L.HABIT_START + i, L.HABIT_DAY_COL + d) === true; }),
       mood: { score: moodScore_(v(L.MOOD, c)), memo: String(v(L.MOOD_MEMO, c)).trim() },
-      schedule: schedule[key] || [],
+      schedule: (byDate[key] || {}).items || [],
+      holiday: (byDate[key] || {}).holiday || '',
     });
   }
   const must = [];
@@ -98,6 +98,50 @@ function webWeekData_() {
     info: [L.GOAL_ROW, L.REWARD_ROW, L.AFFIRM_ROW].map(function (r) { return String(v(r, L.INFO_VALUE_COL)).trim(); }),
     must: must,
   };
+}
+
+/**
+ * _일정 행 → 날짜별 {items, holiday}
+ * items: 화면에 보일 일정 (캘린더 cal / 내 일정 memo / 시간표 tt). 공휴일은 holiday 이름으로만
+ * 캘린더에도 있는 메모(연동)는 캘린더 쪽만 보이고, 수정하면 둘 다 바뀜
+ * ref = 수정·삭제 때 그 줄을 다시 찾는 열쇠 (종류 + 그날 같은 종류 중 순서 + 글자)
+ */
+function scheduleByDate_(rows) {
+  const out = {}, count = {};
+  rows.forEach(function (r) {
+    const key = dateKey_(r[0]);
+    const entry = out[key] = out[key] || { items: [], holiday: '' };
+    if (r[1] === CONFIG.EVENT_TYPE.HOLIDAY) {
+      entry.holiday = entry.holiday ? entry.holiday + ', ' + r[2] : r[2];
+      return;
+    }
+    const kind = eventKind_(r[1]);
+    const ck = key + '|' + kind;
+    const index = count[ck] = count[ck] === undefined ? 0 : count[ck] + 1;
+    if (kind === 'memo' && r[5] === '연동') return;
+    const p = parseMemoText_(r[2]);
+    entry.items.push({ kind: kind, text: r[2], title: p.title, start: p.start, end: p.end,
+      ref: { kind: kind, index: index, text: r[2] } });
+  });
+  return out;
+}
+
+/**
+ * date가 든 달(6주 달력) 기준 _일정 행. 동기화 기간 밖이면 그 기간 캘린더 일정을 바로 가져와 합침 (시트에는 안 씀)
+ * 먼슬리 화면과 수정·삭제가 같은 목록을 보게 해서 ref 순서가 어긋나지 않게 함
+ */
+function eventRowsAround_(date) {
+  const rows = readEvents_();
+  const range = syncRange_();
+  const gs = mondayOf_(new Date(date.getFullYear(), date.getMonth(), 1)), ge = addDays_(gs, 42);
+  if (gs >= range.start && ge <= range.end) return rows;
+  const extra = calendarRows_({ start: gs, end: ge });
+  const inGrid = function (d) { return d >= gs && d < ge; };
+  return sortEvents_(rows.filter(function (r) { return r[1] !== CONFIG.EVENT_TYPE.CAL || !inGrid(r[0]); })
+    .map(function (r) {
+      if (r[1] !== CONFIG.EVENT_TYPE.MEMO || !r[4] || !inGrid(r[0])) return r;
+      return r.slice(0, 5).concat([extra.ids[r[4]] ? '연동' : '']);
+    }).concat(extra.rows));
 }
 
 /** _일정 구분 → 화면용 종류 */
@@ -120,7 +164,9 @@ function timetableData_() {
 
 /** 먼슬리 화면 데이터 (달력·월간 목표·습관 달성률·기분 그래프) */
 function webGetMonth(y, m) {
-  return withLock_(function () { return monthData_(y, m); });
+  return withLock_(function () {
+    return cached_('month|' + y + '-' + m + '|' + dateKey_(today_()), function () { return monthData_(y, m); });
+  }, true);
 }
 
 /**
@@ -134,23 +180,14 @@ function monthData_(y, m) {
   const elapsed = today < first ? 0 : Math.min(days, diffDays_(first, today) + 1);
 
   const dates = [];
-  for (let n = 1; n <= days; n++) dates.push({ day: n, items: [], mood: '', todo: [0, 0] });
+  for (let n = 1; n <= days; n++) dates.push({ day: n, items: [], holiday: '', mood: '', todo: [0, 0] });
   const at = function (key) { return key.indexOf(prefix) === 0 ? dates[+key.slice(8) - 1] : null; };
 
-  const rows = readEvents_();
-  const linked = {};
-  rows.forEach(function (r) { if (r[1] === CONFIG.EVENT_TYPE.MEMO && r[4]) linked[r[4]] = true; });
-  const memoIndex = {};
-  rows.forEach(function (r) {
-    const key = dateKey_(r[0]), cell = at(key);
-    if (!cell) return;
-    if (r[1] === CONFIG.EVENT_TYPE.MEMO) {
-      const i = memoIndex[key] = (memoIndex[key] === undefined ? 0 : memoIndex[key] + 1);
-      const p = parseMemoText_(r[2]);
-      cell.items.push({ kind: 'memo', text: r[2], index: i, linked: !!r[4], start: p.start, end: p.end, title: p.title });
-    } else if (r[1] === CONFIG.EVENT_TYPE.CAL && !linked[r[4]]) {
-      cell.items.push({ kind: 'cal', text: r[2] });
-    }
+  const byDate = scheduleByDate_(eventRowsAround_(first));
+  dates.forEach(function (c) {
+    const e = byDate[prefix + ('0' + c.day).slice(-2)] || {};
+    c.items = (e.items || []).filter(function (it) { return it.kind !== 'tt'; }); // 달력에는 시간표 안 넣음
+    c.holiday = e.holiday || '';
   });
 
   const habits = getHabits_().filter(String);
@@ -184,7 +221,7 @@ function monthData_(y, m) {
 function webGetTimeline(key) {
   return withLock_(function () {
     return { key: key, slots: readTimeline_(dateOnly_(key)) };
-  });
+  }, true);
 }
 
 /* ---------- 쓰기 (화면은 먼저 바뀌고, 여기서 뒤에서 저장) ---------- */
@@ -323,85 +360,124 @@ function webSetTimeline(key, slots) {
 
 /* ---------- 먼슬리 일정(메모) · 시간표 · 습관 편집 ---------- */
 
-/** 그날 메모 index번째가 화면에서 본 글자와 같은지 확인 (다른 기기에서 바뀐 경우 막기) */
-function checkMemo_(rows, date, index, original) {
-  const memo = memosOf_(rows, date)[index];
-  if (!memo || memo[2] !== original) throw new Error('다른 곳에서 바뀌었어요. 새로고침 후 다시 해 주세요');
-  return memo;
+/** 그날 ref에 해당하는 _일정 줄 찾기 (다른 기기에서 바뀌었으면 오류) */
+function findItemRow_(rows, date, ref) {
+  const key = dateKey_(date);
+  const same = rows.filter(function (r) { return dateKey_(r[0]) === key && eventKind_(r[1]) === ref.kind && r[1] !== CONFIG.EVENT_TYPE.HOLIDAY; });
+  const row = same[ref.index];
+  if (!row || row[2] !== ref.text) throw new Error('다른 곳에서 바뀌었어요. 새로고침 후 다시 해 주세요');
+  return row;
+}
+
+/** 입력 → 일정 글자 ('11:00-13:00 제목' / '15:00 제목' / '제목') */
+function itemText_(shape) {
+  const hhmm = function (t) { return ('0' + t.h).slice(-2) + ':' + ('0' + t.m).slice(-2); };
+  return (shape.st ? hhmm(shape.st) + (shape.en ? '-' + hhmm(shape.en) : '') + ' ' : '') + shape.title;
+}
+
+/** 결과에 최신 위클리(+ 먼슬리) 붙이기 → 화면이 바로 갱신 */
+function withViews_(res, y, m) {
+  res.week = webWeekData_();
+  res.month = y ? monthData_(y, m) : null;
+  return res;
+}
+
+/** 캘린더 ID로 연동된 메모 줄들 고치기 (text가 null이면 삭제) */
+function updateLinkedMemos_(id, text) {
+  if (!id) return;
+  const rows = readEvents_();
+  let changed = false;
+  const out = rows.filter(function (r) {
+    if (r[1] !== CONFIG.EVENT_TYPE.MEMO || r[4] !== id) return true;
+    changed = true;
+    if (text === null) return false;
+    r[2] = text; r[3] = eventSortKey_(text);
+    return true;
+  });
+  if (changed) { writeEvents_(out); refreshMonthMemos_(); }
 }
 
 /**
- * 먼슬리 일정 저장 (새로 추가: index = null)
- * item = {title, start, end, toCalendar}. 먼슬리 메모(_일정 메모)에 저장 → 위클리·오늘 "일정"에 자동 표시
- * toCalendar면 기존 캘린더 추가 규칙대로 구글 캘린더에도 생성 (일정 칸에는 한 번만 보이게 연동 표시)
- * 이미 캘린더에도 있는 일정을 수정하면 저장해 둔 이벤트 ID로 찾아 캘린더 일정도 같은 규칙으로 수정
- * 반환 {ok, message, month}
+ * 일정 저장 (오늘·요일 상세·먼슬리 공용)
+ * ref = null → 새 일정: 항상 구글 캘린더에 만들고 먼슬리 메모에도 연동해 저장
+ * ref.kind = 'cal' → 구글 캘린더 일정을 ID(없으면 날짜+제목)로 찾아 수정 + 연동 메모도 수정
+ * ref.kind = 'memo' → 내 일정 수정 (캘린더에도 있으면 같이 수정)
+ * 반환 {ok, message, week, month}
  */
-function webSaveMemoItem(key, index, original, item, y, m) {
+function webSaveItem(key, ref, item, y, m) {
   return withLock_(function () {
     const date = dateOnly_(key);
-    const hhmm = function (t) { return ('0' + t.h).slice(-2) + ':' + ('0' + t.m).slice(-2); };
     let res;
     try {
-      const title = String(item.title || '').trim();
-      if (!title) throw new Error('제목을 입력해 주세요');
-      const st = parseTime_(item.start), en = parseTime_(item.end);
-      if (en && !st) throw new Error('시작시간 확인');
-      if (st && en && hhmm(en) <= hhmm(st)) return { ok: false, message: '끝시간 확인', month: monthData_(y, m) };
-      const text = (st ? hhmm(st) + (en ? '-' + hhmm(en) : '') + ' ' : '') + title;
+      const shape = eventShape_(date, item.start, item.end, item.title);
+      if (shape.error) return withViews_({ ok: false, message: shape.error }, y, m);
+      const text = itemText_(shape);
 
-      let eventId = '', msg = '저장됨 ✓';
-      if (index !== null && index !== undefined) eventId = checkMemo_(readEvents_(), date, index, original)[4];
-      // 캘린더에도 만든 일정이면 저장해 둔 ID로 찾아 같이 수정
-      if (eventId) {
-        const up = updateCalendarEvent_(eventId, date, item.start, item.end, title);
-        if (up.ok) msg = '저장됨 ✓ · 구글 캘린더 일정도 수정';
-        else if (!up.found) { eventId = ''; msg = '저장됨 ✓ · 구글 캘린더에서 이미 지워진 일정이라 앱에만 저장했어요'; }
-        else throw new Error(up.message);
+      if (!ref) {
+        const cal = createCalendarEvent_(date, item.start, item.end, item.title); // 안에서 캘린더 다시 불러옴
+        if (!cal.ok) return withViews_({ ok: false, message: cal.message }, y, m);
+        const rows = readEvents_();
+        rows.push([date, CONFIG.EVENT_TYPE.MEMO, text, eventSortKey_(text), cal.id, '연동']);
+        writeEvents_(rows);
+        refreshMonthMemos_();
+        res = { ok: true, message: '저장됨 ✓ · 구글 캘린더에도 추가' };
+      } else if (ref.kind === 'cal') {
+        const row = findItemRow_(eventRowsAround_(date), date, ref);
+        const up = updateCalendarEvent_(row[4], date, item.start, item.end, item.title, calendarTitles_(row[2]));
+        if (!up.ok) throw new Error(up.found ? up.message : '구글 캘린더에서 찾지 못했어요 (이미 지워졌을 수 있어요)');
+        updateLinkedMemos_(row[4], text);
+        res = { ok: true, message: '수정됨 ✓ · 구글 캘린더에도 반영' };
+      } else if (ref.kind === 'memo') {
+        let id = findItemRow_(readEvents_(), date, ref)[4], msg = '수정됨 ✓';
+        if (id) {
+          const up = updateCalendarEvent_(id, date, item.start, item.end, item.title, []);
+          if (up.ok) msg += ' · 구글 캘린더에도 반영';
+          else if (!up.found) { id = ''; msg += ' · 구글 캘린더에서 이미 지워진 일정이라 앱에만 저장했어요'; }
+          else throw new Error(up.message);
+        }
+        const rows = readEvents_();
+        const old = findItemRow_(rows, date, ref);
+        old[2] = text; old[3] = eventSortKey_(text); old[4] = id; old[5] = id ? '연동' : '';
+        writeEvents_(rows);
+        refreshMonthMemos_();
+        res = { ok: true, message: msg };
+      } else {
+        throw new Error('시간표·공휴일은 여기서 바꿀 수 없어요');
       }
-      if (item.toCalendar && !eventId) {
-        const cal = createCalendarEvent_(date, item.start, item.end, title); // 안에서 캘린더 다시 불러옴
-        if (cal.ok) { eventId = cal.id; msg += ' · 구글 캘린더에도 추가'; }
-        else msg = '저장됨 ✓ · 캘린더: ' + cal.message;
-      }
-
-      // 캘린더를 불러온 뒤의 최신 목록에서 메모 고치기
-      let rows = readEvents_();
-      if (index !== null && index !== undefined) {
-        const old = checkMemo_(rows, date, index, original);
-        rows = rows.filter(function (r) { return r !== old; });
-      }
-      rows.push([date, CONFIG.EVENT_TYPE.MEMO, text, eventSortKey_(text), eventId, eventId ? '연동' : '']);
-      writeEvents_(rows);
-      refreshMonthMemos_();
-      res = { ok: true, message: msg };
     } catch (err) {
-      res = { ok: false, message: '오류: ' + err.message };
+      res = { ok: false, message: err.message };
     }
-    res.month = monthData_(y, m);
-    return res;
+    return withViews_(res, y, m);
   });
 }
 
-/** 먼슬리 일정 삭제 (캘린더에도 만든 일정이면 구글 캘린더에서도 삭제) */
-function webDeleteMemoItem(key, index, original, y, m) {
+/** 일정 삭제 (캘린더 일정이면 구글 캘린더에서도 삭제) → {ok, message, week, month} */
+function webDeleteItem(key, ref, y, m) {
   return withLock_(function () {
     const date = dateOnly_(key);
     let res;
     try {
-      const id = checkMemo_(readEvents_(), date, index, original)[4];
-      // 캘린더에도 만든 일정이면 저장해 둔 ID로 찾아 같이 삭제 (그 뒤 최신 목록에서 메모 삭제)
-      const gone = id ? deleteCalendarEvent_(id) : false;
-      const rows = readEvents_();
-      const old = checkMemo_(rows, date, index, original);
-      writeEvents_(rows.filter(function (r) { return r !== old; }));
-      refreshMonthMemos_();
-      res = { ok: true, message: '삭제됨' + (gone ? ' · 구글 캘린더 일정도 삭제' : id ? ' (구글 캘린더에서는 이미 지워져 있었어요)' : '') };
+      const row = findItemRow_(ref.kind === 'cal' ? eventRowsAround_(date) : readEvents_(), date, ref);
+      if (ref.kind === 'cal') {
+        if (!deleteCalendarEvent_(row[4], date, calendarTitles_(row[2]))) {
+          throw new Error('구글 캘린더에서 찾지 못했어요 (이미 지워졌을 수 있어요)');
+        }
+        updateLinkedMemos_(row[4], null);
+        res = { ok: true, message: '삭제됨 · 구글 캘린더에서도 삭제' };
+      } else if (ref.kind === 'memo') {
+        const gone = row[4] ? deleteCalendarEvent_(row[4], date, []) : false;
+        const rows = readEvents_();
+        const old = findItemRow_(rows, date, ref);
+        writeEvents_(rows.filter(function (r) { return r !== old; }));
+        refreshMonthMemos_();
+        res = { ok: true, message: '삭제됨' + (gone ? ' · 구글 캘린더에서도 삭제' : '') };
+      } else {
+        throw new Error('시간표·공휴일은 여기서 지울 수 없어요');
+      }
     } catch (err) {
-      res = { ok: false, message: '오류: ' + err.message };
+      res = { ok: false, message: err.message };
     }
-    res.month = monthData_(y, m);
-    return res;
+    return withViews_(res, y, m);
   });
 }
 
