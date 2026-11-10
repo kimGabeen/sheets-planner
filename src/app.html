@@ -840,7 +840,33 @@ setInterval(() => {
   if (!document.hidden && !S.pending && !isEditing() && !S.tl.painting) reload(false);
 }, 60000);
 
-fixSafeArea();
-render();
-reload(false);
+/** 처음 열 때 주소의 꼬리표 (#day-2026-11-12 → 'day-2026-11-12') */
+function readStartHash() {
+  return new Promise((resolve) => {
+    try {
+      google.script.url.getLocation((loc) => resolve(String(loc.hash || '')));
+    } catch (e) {
+      resolve(location.hash.replace(/^#/, '')); // 미리보기 등 Apps Script 밖
+    }
+  });
+}
+
+/**
+ * 시작: 주소에 #day-날짜가 남아 있으면 (예전에 연 요일 상세) 그 화면으로 가지 않고 기본 화면(오늘 탭)으로.
+ * 오늘 날짜면 오늘 탭이 바로 그날 화면이고, 다른 날짜는 무시. 남은 꼬리표는 지움
+ */
+async function start() {
+  fixSafeArea();
+  const hash = await readStartHash();
+  if (/^day-\d{4}-\d{2}-\d{2}$/.test(hash)) {
+    S.tab = 'today';
+    S.detail = null;
+    writePref('tab', 'today');
+    if (hist) hist.replace(null, {}, '');
+  }
+  render();
+  reload(false);
+}
+
+start();
 </script>
