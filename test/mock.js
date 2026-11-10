@@ -128,6 +128,16 @@ function createEnv() {
     createEvent: (t, s, e) => { const ev = mkEvent(t, s, e, false); events.push(ev); return ev; },
     createAllDayEvent: (t, d) => { const ev = mkEvent(t, d, new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1), true); events.push(ev); return ev; },
   };
+  // "대한민국의 휴일" 공개 캘린더 (subscribed=false면 구독 전 상태)
+  const holidays = { subscribed: false, list: [
+    ['2026-11-11', '테스트 기념일'], ['2026-12-25', '기독탄신일'], ['2027-01-01', '신정'],
+  ] };
+  const holidayCal = {
+    getEvents: () => holidays.list.map(([k, t]) => {
+      const [y, m, d] = k.split('-').map(Number);
+      return { getTitle: () => t, getAllDayStartDate: () => new Date(y, m - 1, d), getAllDayEndDate: () => new Date(y, m - 1, d + 1) };
+    }),
+  };
   const triggerBuilder = (name) => chain({ create: () => { triggers.push({ getHandlerFunction: () => name }); } });
   const ctx = {
     console, Date, Math, JSON, String, Number, Object, Array, parseInt, isNaN,
@@ -142,7 +152,11 @@ function createEnv() {
       deleteTrigger: (t) => triggers.splice(triggers.indexOf(t), 1),
       newTrigger: triggerBuilder,
     },
-    CalendarApp: { getDefaultCalendar: () => calendar },
+    CalendarApp: {
+      getDefaultCalendar: () => calendar,
+      getCalendarById: () => (holidays.subscribed ? holidayCal : null),
+      subscribeToCalendar: () => { holidays.subscribed = true; return holidayCal; },
+    },
     PropertiesService: {
       getScriptProperties: () => store(props),
       getDocumentProperties: () => store(docProps),
@@ -158,7 +172,7 @@ function createEnv() {
   for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort()) {
     vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f });
   }
-  return { ctx, ss, props, docProps, triggers, events, cache, run: (code) => vm.runInContext(code, ctx) };
+  return { ctx, ss, props, docProps, holidays, triggers, events, cache, run: (code) => vm.runInContext(code, ctx) };
 }
 
 module.exports = { createEnv, Sheet };
