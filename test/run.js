@@ -7,6 +7,8 @@ const assert = require('assert');
 const { createEnv, Sheet } = require('./mock');
 
 let passed = 0;
+/** vm 안에서 만든 배열·객체도 내용으로 비교 */
+const same = (actual, expected) => assert.deepStrictEqual(JSON.parse(JSON.stringify(actual)), expected);
 function test(name, fn) {
   try { fn(); passed++; console.log('  ✓ ' + name); } catch (err) { console.log('  ✗ ' + name + '\n    ' + err.stack.split('\n').slice(0, 3).join('\n    ')); process.exitCode = 1; }
 }
@@ -200,6 +202,87 @@ test('예전 2열 위클리 입력값이 새 3열 위치로 옮겨짐', () => {
   assert.deepStrictEqual(weeklyTodos(env, 1)[0], [true, '', '화요일 일']);
   assert.strictEqual(sh.getRange(w.MOOD, w.checkCol(0)).getValue(), '4 🙂');
   assert.strictEqual(sh.getRange(w.HABIT_START, w.HABIT_DAY_COL + 2).getValue(), true);
+});
+
+
+console.log('웹앱 API');
+test('webBoot: 오늘 위치·7일·카테고리', () => {
+  const env = envAt(2026, 11, 11);
+  const b = env.ctx.webBoot();
+  assert.strictEqual(b.todayKey, '2026-11-11');
+  assert.strictEqual(b.todayIndex, 2);
+  assert.strictEqual(b.week.days.length, 7);
+  assert.strictEqual(b.week.monday, '2026-11-09');
+  assert.strictEqual(b.categories[0].name, '공부');
+  assert.strictEqual(b.week.days[2].todos.length, 10);
+});
+test('webSetTodos: 정렬 결과 반환 + 위클리·오늘 시트·기록 반영', () => {
+  const env = envAt(2026, 11, 11);
+  const rows = env.ctx.webSetTodos('2026-11-11', [[true, '', '끝'], [false, '1530', '회의'], [false, '', '독서']]);
+  same(rows.slice(0, 4), [[false, '15:30', '회의'], [false, '', '독서'], [true, '', '끝'], [false, '', '']]);
+  same(weeklyTodos(env, 2)[0], [false, '15:30', '회의']);
+  assert.strictEqual(ts(env).getRange(T(env).TODO_START, 3).getValue(), '회의', '오늘 시트 반영');
+  assert.strictEqual(archiveRows(env).filter((r) => r.cat === '할일').length, 3);
+  assert.throws(() => env.ctx.webSetTodos('2026-11-20', []), /이번 주/);
+});
+test('webSetHabit·webSetMood·webSetMust → 시트 반영', () => {
+  const env = envAt(2026, 11, 11);
+  const w = W(env), t = T(env);
+  env.ctx.webSetHabit('2026-11-11', 1, true);
+  env.ctx.webSetMood('2026-11-11', 4, '좋은 하루');
+  env.ctx.webSetMust([[true, '보고서 제출'], [false, '운동 3번']]);
+  assert.strictEqual(ws(env).getRange(w.HABIT_START + 1, w.HABIT_DAY_COL + 2).getValue(), true);
+  assert.strictEqual(ws(env).getRange(w.MOOD, w.checkCol(2)).getValue(), '4 🙂');
+  assert.strictEqual(ts(env).getRange(t.HABIT_START + 1, 1).getValue(), true);
+  assert.strictEqual(ts(env).getRange(t.MOOD_MEMO, 2).getValue(), '좋은 하루');
+  assert.strictEqual(ts(env).getRange(t.MUST_START, 2).getValue(), '보고서 제출');
+  const mood = archiveRows(env).find((r) => r.cat === '기분');
+  assert.strictEqual(mood.value, 4);
+  assert.ok(archiveRows(env).find((r) => r.cat === '주간목표' && r.item === '보고서 제출' && r.done === true));
+});
+test('webGetMonth: 기분·습관 달성률·월간 목표', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSetHabit('2026-11-10', 0, true);
+  env.ctx.webSetHabit('2026-11-11', 0, true);
+  env.ctx.webSetMood('2026-11-10', 5, '');
+  env.ctx.webSetMonthGoals(2026, 11, [[false, '책 2권'], [true, '저축']]);
+  const M = env.ctx.webGetMonth(2026, 11);
+  assert.strictEqual(M.days, 30);
+  assert.strictEqual(M.offset, 6, '11/1은 일요일');
+  assert.strictEqual(M.dates[9].mood, 5);
+  assert.strictEqual(M.elapsed, 11);
+  assert.strictEqual(M.habits[0].done, 2);
+  same(M.goals.slice(0, 2), [[false, '책 2권'], [true, '저축']]);
+});
+test('타임라인: 저장·불러오기, 없는 카테고리는 버림, 다시 저장하면 덮어씀', () => {
+  const env = envAt(2026, 11, 11);
+  const slots = new Array(144).fill('');
+  slots[54] = '공부'; slots[55] = '공부'; slots[60] = '없는것';
+  env.ctx.webSetTimeline('2026-11-11', slots);
+  let got = env.ctx.webGetTimeline('2026-11-11').slots;
+  assert.strictEqual(got[54], '공부');
+  assert.strictEqual(got[60], '');
+  const rows = env.ss.getSheetByName('타임라인').getRange(2, 1, 2, 3).getDisplayValues();
+  same(rows.map((r) => r.slice(1)), [['09:00', '공부'], ['09:10', '공부']]);
+  slots[54] = ''; env.ctx.webSetTimeline('2026-11-11', slots);
+  got = env.ctx.webGetTimeline('2026-11-11').slots;
+  assert.strictEqual(got.filter(Boolean).length, 1);
+});
+test('webAddEvent: 같은 규칙 + 그날 일정에 바로 보임', () => {
+  const env = envAt(2026, 11, 11);
+  const res = env.ctx.webAddEvent({ date: '2026-11-12', start: '15:00', end: '', title: '스터디' });
+  assert.ok(res.ok, res.message);
+  assert.strictEqual(env.events[0].title, '15:00 스터디');
+  same(res.week.days[3].schedule.map((x) => x.text), ['15:00 스터디']);
+  const bad = env.ctx.webAddEvent({ date: '2026-11-12', start: '16:00', end: '15:00', title: '회의' });
+  assert.strictEqual(bad.message, '끝시간 확인');
+});
+test('예전 문서 속성 값은 스크립트 속성으로 옮겨짐 (넘기기 중복 방지 유지)', () => {
+  const env = createEnv();
+  env.docProps.set('CARRY_DONE', '2026-11-10');
+  env.docProps.set('LAYOUT_VERSION', '2');
+  assert.strictEqual(env.run("props_().getProperty('CARRY_DONE')"), '2026-11-10');
+  assert.strictEqual(env.props.get('LAYOUT_VERSION'), '2');
 });
 
 console.log(`\n${passed}개 통과` + (process.exitCode ? ' (실패 있음)' : ''));

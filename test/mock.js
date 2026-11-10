@@ -98,9 +98,12 @@ function createEnv() {
     getSheetByName: (n) => sheets.find((s) => s.name === n) || null,
     insertSheet: (n) => { const s = new Sheet(n); sheets.push(s); return s; },
     getSheets: () => sheets.slice(),
+    getId: () => 'test-sheet-id',
     deleteSheet: (s) => sheets.splice(sheets.indexOf(s), 1),
   });
-  const props = new Map();
+  const props = new Map(); // 스크립트 속성
+  const docProps = new Map(); // 문서 속성 (예전 버전 값 옮기기 테스트용)
+  const store = (m) => ({ getProperty: (k) => (m.has(k) ? m.get(k) : null), setProperty: (k, v) => m.set(k, String(v)) });
   const triggers = [];
   const events = [];
   const cache = new Map();
@@ -133,11 +136,13 @@ function createEnv() {
       newTrigger: triggerBuilder,
     },
     CalendarApp: { getDefaultCalendar: () => calendar },
-    PropertiesService: { getDocumentProperties: () => ({
-      getProperty: (k) => (props.has(k) ? props.get(k) : null), setProperty: (k, v) => props.set(k, String(v)),
-    }) },
+    PropertiesService: {
+      getScriptProperties: () => store(props),
+      getDocumentProperties: () => store(docProps),
+    },
+    HtmlService: chain({}),
     CacheService: { getScriptCache: () => ({ get: (k) => cache.get(k) || null, put: (k, v) => cache.set(k, v) }) },
-    LockService: { getDocumentLock: () => ({ waitLock() {}, releaseLock() {} }), getScriptLock: () => ({ tryLock: () => true, releaseLock() {} }) },
+    LockService: { getDocumentLock: () => ({ waitLock() {}, releaseLock() {} }), getScriptLock: () => ({ tryLock: () => true, waitLock() {}, releaseLock() {} }) },
     Charts: { ChartType: {}, ChartHiddenDimensionStrategy: {} },
     Utilities: { formatDate },
   };
@@ -146,7 +151,7 @@ function createEnv() {
   for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort()) {
     vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f });
   }
-  return { ctx, ss, props, triggers, events, cache, run: (code) => vm.runInContext(code, ctx) };
+  return { ctx, ss, props, docProps, triggers, events, cache, run: (code) => vm.runInContext(code, ctx) };
 }
 
 module.exports = { createEnv, Sheet };

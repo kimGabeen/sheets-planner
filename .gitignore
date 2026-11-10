@@ -5,3 +5,6 @@
 # 의존성·OS 파일
 node_modules/
 .DS_Store
+
+# 웹앱 배포 ID (개인 배포 주소)
+.deployment-id
