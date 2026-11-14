@@ -120,8 +120,33 @@ const CONFIG = {
   },
 };
 
-/** 위클리 시트 레이아웃 (요일 하나 = 체크 | 시간 | 내용 3열) */
-const WEEKLY = (function () {
+/**
+ * 시트에 보이는 할 일·꼭 끝낼 일 줄 수 (기본 10·5, 많아지면 자동으로 늘었다가 줄면 돌아옴)
+ * wTodo·wMust = 위클리, tTodo·tMust = 오늘 시트. 스크립트 속성에 저장, 실행 한 번 동안 기억
+ */
+function layoutCounts_() {
+  return memo_('layoutCounts', function () {
+    const saved = JSON.parse(props_().getProperty('LAYOUT_ROWS') || '{}');
+    return {
+      wTodo: saved.wTodo || CONFIG.TODO_ROWS, wMust: saved.wMust || CONFIG.MUST_COUNT,
+      tTodo: saved.tTodo || CONFIG.TODO_ROWS, tMust: saved.tMust || CONFIG.MUST_COUNT,
+    };
+  });
+}
+
+/** 줄 수 하나 바꿔 저장 (행을 넣거나 뺀 직후) */
+function setLayoutCount_(key, n) {
+  const c = Object.assign({}, layoutCounts_());
+  c[key] = n;
+  props_().setProperty('LAYOUT_ROWS', JSON.stringify(c));
+  RUN_MEMO_.layoutCounts = c;
+}
+
+/** 줄 수 → 위클리 레이아웃 (같은 줄 수면 다시 만들지 않음) */
+const LAYOUT_CACHE_ = {};
+function weeklyLayout_(c) {
+  const key = 'W' + c.wTodo + '|' + c.wMust;
+  if (LAYOUT_CACHE_[key]) return LAYOUT_CACHE_[key];
   const L = {
     DAY_SPAN: 3,
     TITLE: { row: 1, col: 1 },
@@ -137,7 +162,8 @@ const WEEKLY = (function () {
     MUST_HEADER: 5,
     MUST_START: 6,
     MUST_WIDTH: 7, // 꼭 끝낼 일 상자 너비 (A~G)
-    DAY_HEADER: 13,
+    MUST_N: c.wMust, // 꼭 끝낼 일 줄 수 (자동 확장)
+    TODO_N: c.wTodo, // 요일별 할 일 줄 수 (자동 확장)
   };
   L.checkCol = function (d) { return 2 + L.DAY_SPAN * d; }; // 요일 d(0=월)의 체크박스 열
   L.timeCol = function (d) { return 3 + L.DAY_SPAN * d; }; // 시간 열
@@ -151,18 +177,23 @@ const WEEKLY = (function () {
   L.CHART_DATA_COL = L.HABIT_PCT_COL + 2; // 숨김 차트 데이터
   L.MEMO_COL0 = L.CHART_DATA_COL + 4; // 숨김: 요일별 할 일 메모 (월~일 7열, 할 일과 같은 줄)
   L.memoCol = function (d) { return L.MEMO_COL0 + d; };
-  L.MUST_PROGRESS = L.MUST_START + CONFIG.MUST_COUNT;
+  L.MUST_PROGRESS = L.MUST_START + L.MUST_N;
+  L.DAY_HEADER = L.MUST_PROGRESS + 2; // 꼭 끝낼 일이 늘면 아래 전체가 같이 밀림
   L.OVERALL = { row: L.DAY_HEADER - 1, col: L.HABIT_NAME_COL };
   L.RATE = L.DAY_HEADER + 1;
   L.SCHED_START = L.RATE + 1;
   L.TODO_START = L.SCHED_START + CONFIG.SCHEDULE_LINES;
-  L.COUNT = L.TODO_START + CONFIG.TODO_ROWS;
+  L.COUNT = L.TODO_START + L.TODO_N;
   L.MOOD = L.COUNT + 1;
   L.MOOD_MEMO = L.MOOD + 1;
   L.HABIT_START = L.DAY_HEADER + 1;
   L.LAST_COL = L.MEMO_COL0 + 6;
+  LAYOUT_CACHE_[key] = L;
   return L;
-})();
+}
+
+/** 위클리 시트 레이아웃 (요일 하나 = 체크 | 시간 | 내용 3열) — 줄 수에 따라 위치가 바뀌므로 읽을 때마다 계산 */
+const WEEKLY = new Proxy({}, { get: function (_, k) { return weeklyLayout_(layoutCounts_())[k]; } });
 
 /** 예전(버전 1) 위클리 위치: 요일 하나 = 체크 | 내용 2열 → 마이그레이션에서만 사용 */
 const WEEKLY_V1 = {
@@ -212,15 +243,17 @@ const MONTHLY = (function () {
   return L;
 })();
 
-/** 오늘 시트 레이아웃 (폰 세로, 3열: 체크 | 시간 | 내용) */
-const TODAY = (function () {
+/** 줄 수 → 오늘 시트 레이아웃 */
+function todayLayout_(c) {
+  const key = 'T' + c.tTodo + '|' + c.tMust;
+  if (LAYOUT_CACHE_[key]) return LAYOUT_CACHE_[key];
   let r = 1;
-  const L = { DATE_ROW: r };
+  const L = { DATE_ROW: r, TODO_N: c.tTodo, MUST_N: c.tMust };
   r += 2;
   L.SCHED_HEADER = r; L.SCHED_START = r + 1; r = L.SCHED_START + CONFIG.SCHEDULE_LINES + 1;
-  L.TODO_HEADER = r; L.TODO_START = r + 1; r = L.TODO_START + CONFIG.TODO_ROWS + 1;
+  L.TODO_HEADER = r; L.TODO_START = r + 1; r = L.TODO_START + L.TODO_N + 1;
   L.HABIT_HEADER = r; L.HABIT_START = r + 1; r = L.HABIT_START + CONFIG.HABIT_COUNT + 1;
-  L.MUST_HEADER = r; L.MUST_START = r + 1; r = L.MUST_START + CONFIG.MUST_COUNT + 1;
+  L.MUST_HEADER = r; L.MUST_START = r + 1; r = L.MUST_START + L.MUST_N + 1;
   L.MOOD_HEADER = r; L.MOOD = r + 1; L.MOOD_MEMO = r + 2; r += 4;
   L.ADD_HEADER = r;
   L.ADD = { date: r + 1, start: r + 2, end: r + 3, title: r + 4, check: r + 5, result: r + 6 };
@@ -231,10 +264,14 @@ const TODAY = (function () {
   r += 6;
   L.LAST_ROW = r - 1;
   L.OLD_OVERFLOW_ROWS = CONFIG.TODO_ROWS + 1; // 예전 "넘어온 일" 칸 (지금은 없음 → 비움)
-  L.TODO_MORE = L.TODO_START + CONFIG.TODO_ROWS; // 할 일 10개 넘으면 "+N개 더"를 보여 줄 줄
+  L.TODO_MORE = L.TODO_START + L.TODO_N; // 할 일 바로 아래 빈 줄
   L.MEMO_COL = 4; // 숨김: 할 일 메모 (D열, 할 일과 같은 줄)
+  LAYOUT_CACHE_[key] = L;
   return L;
-})();
+}
+
+/** 오늘 시트 레이아웃 (폰 세로, 3열: 체크 | 시간 | 내용) — 줄 수에 따라 계산 */
+const TODAY = new Proxy({}, { get: function (_, k) { return todayLayout_(layoutCounts_())[k]; } });
 
 /** 지난 주 보기 레이아웃 */
 const LASTWEEK = (function () {

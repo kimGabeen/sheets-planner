@@ -215,9 +215,38 @@ function setStatus_(key, msg) {
 }
 
 /** 할 일 메모 칸 (10줄, 열이 모자라면 늘림 — setup 전에도 동작) */
-function memoRange_(sh, row, col) {
-  ensureSize_(sh, row + CONFIG.TODO_ROWS, col);
-  return sh.getRange(row, col, CONFIG.TODO_ROWS, 1);
+function memoRange_(sh, row, col, n) {
+  const rows = n || CONFIG.TODO_ROWS;
+  ensureSize_(sh, row + rows, col);
+  return sh.getRange(row, col, rows, 1);
+}
+
+/**
+ * 블록 줄 수 맞추기: 지금 cur줄 → target줄
+ * 늘릴 때는 마지막 줄 "앞"에 행을 넣어(블록 안쪽) 조건부 서식 범위·아래쪽 수식·차트가 같이 밀리게 하고,
+ * 맨 위 줄의 서식·체크박스를 새 줄에 복사. 줄일 때는 블록 끝의 행을 지움. (행 전체라 숨김 메모 열도 같이)
+ */
+function resizeBlock_(sh, start, cur, target, width, mergeFrom) {
+  if (target === cur) return false;
+  if (target > cur) {
+    const add = target - cur;
+    sh.insertRowsBefore(start + cur - 1, add);
+    const fresh = sh.getRange(start + cur - 1, 1, add, width);
+    const tpl = sh.getRange(start, 1, 1, width);
+    tpl.copyTo(fresh, SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
+    tpl.copyTo(fresh, SpreadsheetApp.CopyPasteType.PASTE_DATA_VALIDATION, false);
+    if (mergeFrom) { // 내용 칸이 병합된 블록 (꼭 끝낼 일)
+      for (let i = 0; i < add; i++) sh.getRange(start + cur - 1 + i, mergeFrom[0], 1, mergeFrom[1]).merge();
+    }
+  } else {
+    sh.deleteRows(start + target, cur - target);
+  }
+  return true;
+}
+
+/** 필요한 줄 수: 기본 줄 수, 또는 개수 + 빈 줄 2개 중 큰 쪽 */
+function wantedRows_(count, base) {
+  return Math.max(base, count + 2);
 }
 
 /**

@@ -70,7 +70,7 @@ function buildWeeklyTop_(sh, theme, pale) {
   // 이번 주 꼭 끝낼 일
   const MW = L.MUST_WIDTH;
   styleHeader_(sh.getRange(L.MUST_HEADER, 1, 1, MW).merge().setValue('이번 주 꼭 끝낼 일'), theme);
-  for (let i = 0; i < CONFIG.MUST_COUNT; i++) {
+  for (let i = 0; i < L.MUST_N; i++) {
     checkbox_(sh.getRange(L.MUST_START + i, 1));
     underline_(sh.getRange(L.MUST_START + i, 2, 1, MW - 1).merge());
   }
@@ -119,10 +119,10 @@ function buildWeeklyDays_(sh, theme, pale) {
     }
 
     // 4) 할 일 10줄 (체크박스 + 시간(선택) + 내용) — 시간은 글자로 저장해 정렬
-    checkbox_(sh.getRange(L.TODO_START, c, CONFIG.TODO_ROWS, 1));
-    sh.getRange(L.TODO_START, L.timeCol(d), CONFIG.TODO_ROWS, 1).setNumberFormat('@')
+    checkbox_(sh.getRange(L.TODO_START, c, L.TODO_N, 1));
+    sh.getRange(L.TODO_START, L.timeCol(d), L.TODO_N, 1).setNumberFormat('@')
       .setHorizontalAlignment('center').setFontSize(9).setFontColor(theme);
-    underline_(sh.getRange(L.TODO_START, c, CONFIG.TODO_ROWS, S));
+    underline_(sh.getRange(L.TODO_START, c, L.TODO_N, S));
 
     // 5) 완료 / 남은 개수 (+10개 넘으면 "+N개 더")
     sh.getRange(L.COUNT, c, 1, S).merge()
@@ -217,7 +217,7 @@ function buildWeeklyCharts_(sh, theme, light) {
 function applyWeeklyRules_(sh, theme, pale) {
   const L = WEEKLY, C = CONFIG.COLORS;
   const first = L.checkCol(0), last = L.LAST_DAY_COL, width = last - first + 1;
-  const todo = sh.getRange(L.TODO_START, first, CONFIG.TODO_ROWS, width);
+  const todo = sh.getRange(L.TODO_START, first, L.TODO_N, width);
   // 요일 블록 안에서 체크박스 열의 위치 (블록 = 체크|시간|내용)
   const idx = 'COLUMN()-' + (first - 1) + '-MOD(COLUMN()-' + first + ',' + L.DAY_SPAN + ')';
   const rowRef = function (r, abs) {
@@ -349,12 +349,12 @@ function onWeeklyEdit_(e) {
 
   for (let d = 0; d < 7; d++) {
     const date = addDays_(mon, d);
-    const inTodo = hit_(e.range, L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, L.DAY_SPAN) ||
-      hit_(e.range, L.TODO_START, L.memoCol(d), CONFIG.TODO_ROWS, 1);
+    const inTodo = hit_(e.range, L.TODO_START, L.checkCol(d), L.TODO_N, L.DAY_SPAN) ||
+      hit_(e.range, L.TODO_START, L.memoCol(d), L.TODO_N, 1);
     const inMood = hit_(e.range, L.MOOD, L.checkCol(d), 2, L.DAY_SPAN);
     const inHabit = hit_(e.range, L.HABIT_START, L.HABIT_DAY_COL + d, CONFIG.HABIT_COUNT, 1);
     if (!inTodo && !inMood && !inHabit) continue;
-    if (inTodo) syncTodosFromSheet_(sh, L.TODO_START, L.checkCol(d), L.memoCol(d), date);
+    if (inTodo) syncTodosFromSheet_(sh, L.TODO_START, L.checkCol(d), L.memoCol(d), date, L.TODO_N);
     if (inMood) setMoodData_(date, moodScore_(sh.getRange(L.MOOD, L.checkCol(d)).getValue()), sh.getRange(L.MOOD_MEMO, L.checkCol(d)).getValue());
     if (inHabit) {
       const checks = sh.getRange(L.HABIT_START, L.HABIT_DAY_COL + d, CONFIG.HABIT_COUNT, 1).getValues();
@@ -372,8 +372,8 @@ function onWeeklyEdit_(e) {
       todayParts.habits = todayParts.habits || inHabit;
     }
   }
-  if (hit_(e.range, L.MUST_START, 1, CONFIG.MUST_COUNT, L.MUST_WIDTH)) {
-    syncMustFromSheet_(sh, mon, L.MUST_START, 1, 2);
+  if (hit_(e.range, L.MUST_START, 1, L.MUST_N, L.MUST_WIDTH)) {
+    syncMustFromSheet_(sh, mon, L.MUST_START, 1, 2, L.MUST_N);
     markWeekGoalsDirty_(mon);
     renderWeekView_({ days: [], must: true });
     if (weeklyIndexOf_(todaySheetDate_() || today_()) >= 0) { touchedToday = true; todayParts.must = true; }
@@ -389,12 +389,12 @@ function onWeeklyEdit_(e) {
  * 보이는 줄 i = 저장소 i번째 할 일. 내용을 지우면 그 할 일(과 메모) 삭제, 빈 줄에 적으면 추가.
  * 10개 넘게 있어서 안 보이는 할 일은 그대로 둠
  */
-function syncTodosFromSheet_(sh, row, col, memoCol, date) {
-  const n = CONFIG.TODO_ROWS;
+function syncTodosFromSheet_(sh, row, col, memoCol, date, rowsN) {
+  const n = rowsN || CONFIG.TODO_ROWS;
   const items = getTodos_(date);
   const block = sh.getRange(row, col, n, 3);
   const vals = block.getValues(), disp = block.getDisplayValues();
-  const memos = memoRange_(sh, row, memoCol).getValues();
+  const memos = memoRange_(sh, row, memoCol, n).getValues();
   const shown = Math.min(items.length, n);
   const next = [];
   for (let i = 0; i < n; i++) {
@@ -408,8 +408,8 @@ function syncTodosFromSheet_(sh, row, col, memoCol, date) {
 }
 
 /** 시트의 꼭 끝낼 일 5줄 → 저장소 (안 보이는 6번째부터는 그대로) */
-function syncMustFromSheet_(sh, monday, row, checkCol, textCol) {
-  const n = CONFIG.MUST_COUNT;
+function syncMustFromSheet_(sh, monday, row, checkCol, textCol, rowsN) {
+  const n = rowsN || CONFIG.MUST_COUNT;
   const list = getWeekData_(monday).must;
   const shown = Math.min(list.length, n);
   const checks = sh.getRange(row, checkCol, n, 1).getValues(), texts = sh.getRange(row, textCol, n, 1).getValues();
@@ -419,6 +419,23 @@ function syncMustFromSheet_(sh, monday, row, checkCol, textCol) {
     if (text) next.push({ done: checks[i][0] === true, text: text });
   }
   setWeekMust_(monday, next.concat(list.slice(shown)));
+}
+
+/** 위클리 할 일 줄 수 맞추기 (7일 중 가장 많은 날 + 빈 줄 2개, 최소 10) → 바뀌었으면 true */
+function ensureWeekTodoRows_(sh, most) {
+  const L = WEEKLY, target = wantedRows_(most, CONFIG.TODO_ROWS);
+  // 서식은 할 일 열(A~V)까지만 복사 (옆 습관표 칸은 건드리지 않음, 숨김 메모 열은 서식 없음)
+  if (!resizeBlock_(sh, L.TODO_START, L.TODO_N, target, L.LAST_DAY_COL)) return false;
+  setLayoutCount_('wTodo', target);
+  return true;
+}
+
+/** 위클리 꼭 끝낼 일 줄 수 맞추기 (개수 + 빈 줄 2개, 최소 5) */
+function ensureWeekMustRows_(sh, count) {
+  const L = WEEKLY, target = wantedRows_(count, CONFIG.MUST_COUNT);
+  if (!resizeBlock_(sh, L.MUST_START, L.MUST_N, target, L.MUST_WIDTH, [2, L.MUST_WIDTH - 1])) return false;
+  setLayoutCount_('wMust', target);
+  return true;
 }
 
 /** 완료율 글자 (○◔◑◕● + %) */
@@ -433,7 +450,7 @@ function rateText_(done, total) {
  * 할 일은 10줄, 꼭 끝낼 일은 5줄까지 보이고 넘치면 "+N개 더", 완료율은 전체 기준
  */
 function renderWeekView_(parts) {
-  const L = WEEKLY, sh = sheet_(CONFIG.SHEETS.WEEKLY), n = CONFIG.TODO_ROWS;
+  const sh = sheet_(CONFIG.SHEETS.WEEKLY);
   const mon = weeklyMonday_();
   if (!mon) return;
   const all = !parts;
@@ -445,6 +462,16 @@ function renderWeekView_(parts) {
   const doHabits = all || P.habits;
   const needTodos = doTodos && days.length, needDay = (doMood && days.length) || doHabits;
   const todos = needTodos ? todosByDate_(mon, addDays_(mon, 6)) : {};
+  // 줄 수 맞추기: 꼭 끝낼 일·할 일(7일 중 가장 많은 날) + 빈 줄 2개, 줄면 기본으로 → 아래쪽은 같이 밀림
+  let regrid = false;
+  if (all || P.must) regrid = ensureWeekMustRows_(sh, getWeekData_(mon).must.length) || regrid;
+  if (needTodos) {
+    let most = 0;
+    Object.keys(todos).forEach(function (k) { most = Math.max(most, todos[k].length); });
+    regrid = ensureWeekTodoRows_(sh, most) || regrid;
+  }
+  if (regrid && !all) return renderWeekView_(); // 줄이 바뀌면 전체를 새 위치에 다시 그림
+  const L = WEEKLY, n = L.TODO_N;
   const dayData = needDay ? dayDataByDate_(mon, addDays_(mon, 6)) : {};
   const habits = doHabits ? getHabits_() : [];
   const first = L.checkCol(0), width = L.LAST_DAY_COL - first + 1;
@@ -458,7 +485,7 @@ function renderWeekView_(parts) {
       memos.push(t ? t.memo : '');
     }
     const done = list.filter(function (t) { return t.done; }).length;
-    rows.push([done + ' 완료 · ' + (list.length - done) + ' 남음' + (list.length > n ? ' · +' + (list.length - n) + '개 더' : ''), '', '']);
+    rows.push([done + ' 완료 · ' + (list.length - done) + ' 남음', '', '']);
     return { rows: rows, memos: memos, rate: rateText_(done, list.length), chart: [done, list.length - done] };
   };
   const moodPair = function (d) {
@@ -475,14 +502,14 @@ function renderWeekView_(parts) {
     for (let r = 0; r < n; r++) memo.push(blocks.map(function (b) { return b.memos[r]; }));
     sh.getRange(L.TODO_START, first, n + 1, width).setValues(grid);
     sh.getRange(L.RATE, first, 1, width).setValues(rate);
-    memoRange_(sh, L.TODO_START, L.MEMO_COL0 + 6);
+    memoRange_(sh, L.TODO_START, L.MEMO_COL0 + 6, n);
     sh.getRange(L.TODO_START, L.MEMO_COL0, n, 7).setValues(memo);
     sh.getRange(L.DAY_HEADER + 1, L.CHART_DATA_COL + 1, 7, 2).setValues(blocks.map(function (b) { return b.chart; }));
   } else if (doTodos) {
     days.forEach(function (d) {
       const b = dayBlock(d);
       sh.getRange(L.TODO_START, L.checkCol(d), n + 1, 3).setValues(b.rows);
-      memoRange_(sh, L.TODO_START, L.memoCol(d)).setValues(b.memos.map(function (m) { return [m]; }));
+      memoRange_(sh, L.TODO_START, L.memoCol(d), n).setValues(b.memos.map(function (m) { return [m]; }));
       sh.getRange(L.RATE, L.checkCol(d)).setValue(b.rate);
       sh.getRange(L.DAY_HEADER + 1 + d, L.CHART_DATA_COL + 1, 1, 2).setValues([b.chart]);
     });
@@ -506,7 +533,7 @@ function renderWeekView_(parts) {
     }));
   }
   if (all || P.must || P.info) {
-    const week = getWeekData_(mon), m = CONFIG.MUST_COUNT;
+    const week = getWeekData_(mon), m = L.MUST_N;
     if (all || P.must) {
       const rows = [];
       for (let i = 0; i < m; i++) rows.push(week.must[i] ? [week.must[i].done, week.must[i].text] : [false, '']);
@@ -514,7 +541,7 @@ function renderWeekView_(parts) {
       const done = week.must.filter(function (x) { return x.done; }).length, total = week.must.length;
       const p = total ? done / total : 0;
       sh.getRange(L.MUST_PROGRESS, 2).setFormula('=SPARKLINE(' + p + ',{"charttype","bar";"max",1;"color1","' + getTheme_() + '"})');
-      sh.getRange(L.MUST_PROGRESS, L.MUST_WIDTH - 1).setValue(Math.round(p * 100) + '%' + (total > m ? ' · +' + (total - m) + '개 더' : ''));
+      sh.getRange(L.MUST_PROGRESS, L.MUST_WIDTH - 1).setValue(Math.round(p * 100) + '%');
     }
     if (all || P.info) sh.getRange(L.GOAL_ROW, L.INFO_VALUE_COL, 3, 1).setValues(week.info.map(function (v) { return [v]; }));
   }

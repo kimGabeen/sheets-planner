@@ -342,9 +342,9 @@ function migrateToStore_() {
     const habits = getHabits_();
     for (let d = 0; d < 7; d++) {
       const date = addDays_(weekMon, d);
-      const block = sh.getRange(W.TODO_START, W.checkCol(d), CONFIG.TODO_ROWS, 3);
+      const block = sh.getRange(W.TODO_START, W.checkCol(d), W.TODO_N, 3);
       const vals = block.getValues(), disp = block.getDisplayValues();
-      const memos = sh.getMaxColumns() >= W.memoCol(d) ? sh.getRange(W.TODO_START, W.memoCol(d), CONFIG.TODO_ROWS, 1).getValues() : [];
+      const memos = sh.getMaxColumns() >= W.memoCol(d) ? sh.getRange(W.TODO_START, W.memoCol(d), W.TODO_N, 1).getValues() : [];
       let n = 0;
       vals.forEach(function (r, i) {
         const t = cleanTodo_({ done: r[0] === true, start: splitRange_(disp[i][1]).start, end: splitRange_(disp[i][1]).end,
@@ -358,7 +358,7 @@ function migrateToStore_() {
       const memo = String(sh.getRange(W.MOOD_MEMO, W.checkCol(d)).getValue()).trim();
       if (score || memo) dayRows.push([date, C.MOOD, memo, score]);
     }
-    sh.getRange(W.MUST_START, 1, CONFIG.MUST_COUNT, 2).getValues().forEach(function (r, i) {
+    sh.getRange(W.MUST_START, 1, W.MUST_N, 2).getValues().forEach(function (r, i) {
       if (String(r[1]).trim()) weekRows.push([weekMon, WEEK_MUST_, i + 1, r[0] === true, String(r[1]).trim()]);
     });
     [W.GOAL_ROW, W.REWARD_ROW, W.AFFIRM_ROW].forEach(function (row, i) {

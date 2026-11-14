@@ -7,7 +7,7 @@
 /** 오늘 시트 레이아웃·수식·서식 그리기 (입력 값은 유지) */
 function buildToday_(theme) {
   const sh = ensureSheet_(CONFIG.SHEETS.TODAY);
-  const T = TODAY, C = CONFIG.COLORS, n = CONFIG.TODO_ROWS;
+  const T = TODAY, C = CONFIG.COLORS, n = T.TODO_N;
   const pale = tint_(theme, CONFIG.TINT.PALE);
   const ev = CONFIG.SHEETS.EVENTS;
   ensureSize_(sh, T.LAST_ROW + 2, T.MEMO_COL);
@@ -69,7 +69,7 @@ function buildToday_(theme) {
 
   // 이번 주 꼭 끝낼 일
   header(T.MUST_HEADER, '이번 주 꼭 끝낼 일');
-  for (let i = 0; i < CONFIG.MUST_COUNT; i++) {
+  for (let i = 0; i < T.MUST_N; i++) {
     checkbox_(sh.getRange(T.MUST_START + i, 1));
     underline_(sh.getRange(T.MUST_START + i, 2, 1, 2).merge());
   }
@@ -109,7 +109,7 @@ function buildToday_(theme) {
     SpreadsheetApp.newConditionalFormatRule().whenFormulaSatisfied('=$A' + T.TODO_START + '=TRUE')
       .setStrikethrough(true).setFontColor(C.SUB).setBackground(pale)
       .setRanges([sh.getRange(T.TODO_START, 1, n, 3),
-        sh.getRange(T.MUST_START, 1, CONFIG.MUST_COUNT, 3)]).build(),
+        sh.getRange(T.MUST_START, 1, T.MUST_N, 3)]).build(),
     SpreadsheetApp.newConditionalFormatRule()
       .whenFormulaSatisfied('=LEFT($C' + T.TODO_START + ',' + missed.length + ')="' + missed + '"')
       .setFontColor(C.SUB).setRanges([sh.getRange(T.TODO_START, 1, n, 3)]).build(),
@@ -119,6 +119,18 @@ function buildToday_(theme) {
     'IFERROR(VALUE(LEFT($B$' + T.MOOD + ',1)),0)', theme));
   sh.setConditionalFormatRules(rules);
   if (props_().getProperty('STORE_VERSION') === CONFIG.STORE_VERSION) renderTodayView_();
+}
+
+/** 오늘 시트 할 일·꼭 끝낼 일 줄 수 맞추기 → 바뀌었으면 true */
+function ensureTodayRows_(sh, key, count) {
+  const T = TODAY;
+  const isTodo = key === 'tTodo';
+  const target = wantedRows_(count, isTodo ? CONFIG.TODO_ROWS : CONFIG.MUST_COUNT);
+  const changed = isTodo
+    ? resizeBlock_(sh, T.TODO_START, T.TODO_N, target, T.MEMO_COL)
+    : resizeBlock_(sh, T.MUST_START, T.MUST_N, target, 3, [2, 2]);
+  if (changed) setLayoutCount_(key, target);
+  return changed;
 }
 
 /** 오늘 시트에 적힌 날짜 */
@@ -143,21 +155,29 @@ function refreshToday_() {
  * 할 일 10줄·꼭 끝낼 일 5줄까지 보이고 넘치면 "+N개 더", 개수·완료율은 전체 기준
  */
 function renderTodayView_(parts) {
-  const T = TODAY, sh = sheet_(CONFIG.SHEETS.TODAY), n = CONFIG.TODO_ROWS, m = CONFIG.MUST_COUNT;
+  const sh = sheet_(CONFIG.SHEETS.TODAY);
   const date = todaySheetDate_();
   if (!date) return;
   const P = parts || { todos: true, habits: true, must: true, mood: true };
+  // 줄 수 맞추기 (할 일·꼭 끝낼 일 + 빈 줄 2개, 줄면 기본으로) → 바뀌면 아래 칸 위치가 달라지므로 전부 다시 그림
+  const list = P.todos || !parts ? getTodos_(date) : null;
+  const week = P.must || !parts ? getWeekData_(mondayOf_(date)) : null;
+  let regrid = false;
+  if (list) regrid = ensureTodayRows_(sh, 'tTodo', list.length) || regrid;
+  if (week) regrid = ensureTodayRows_(sh, 'tMust', week.must.length) || regrid;
+  if (regrid && parts) return renderTodayView_();
+  const T = TODAY, n = T.TODO_N, m = T.MUST_N;
   if (P.todos) {
-    // 할 일 10줄 + "+N개 더" 줄을 한 번에, 메모·머리글
-    const list = getTodos_(date), rows = [], memos = [];
+    // 할 일 줄 + 아래 빈 줄을 한 번에, 메모·머리글
+    const rows = [], memos = [];
     for (let i = 0; i < n; i++) {
       const t = list[i];
       rows.push(t ? [t.done, todoTime_(t), todoDisplay_(t)] : [false, '', '']);
       memos.push([t ? t.memo : '']);
     }
-    rows.push([list.length > n ? '+' + (list.length - n) + '개 더 (웹앱에서 전부 보기)' : '', '', '']);
+    rows.push(['', '', '']);
     sh.getRange(T.TODO_START, 1, n + 1, 3).setValues(rows);
-    memoRange_(sh, T.TODO_START, T.MEMO_COL).setValues(memos);
+    memoRange_(sh, T.TODO_START, T.MEMO_COL, n).setValues(memos);
     const done = list.filter(function (t) { return t.done; }).length;
     sh.getRange(T.TODO_HEADER, 1).setValue('오늘 할 일   ' + done + ' / ' + list.length);
   }
@@ -167,10 +187,10 @@ function renderTodayView_(parts) {
     if (P.mood) sh.getRange(T.MOOD, 2, 2, 1).setValues([[day.mood.score ? CONFIG.MOODS[day.mood.score - 1] : ''], [day.mood.memo]]);
   }
   if (P.must) {
-    const week = getWeekData_(mondayOf_(date)), must = [];
+    const must = [];
     for (let i = 0; i < m; i++) must.push(week.must[i] ? [week.must[i].done, week.must[i].text] : [false, '']);
     sh.getRange(T.MUST_START, 1, m, 2).setValues(must);
-    sh.getRange(T.MUST_HEADER, 1).setValue('이번 주 꼭 끝낼 일' + (week.must.length > m ? '   +' + (week.must.length - m) + '개 더' : ''));
+    sh.getRange(T.MUST_HEADER, 1).setValue('이번 주 꼭 끝낼 일');
   }
 }
 
@@ -203,8 +223,8 @@ function onTodayEdit_(e) {
   const date = todaySheetDate_();
   if (!date) return;
   const parts = {};
-  if (hit_(e.range, T.TODO_START, 1, CONFIG.TODO_ROWS, T.MEMO_COL)) {
-    syncTodosFromSheet_(sh, T.TODO_START, 1, T.MEMO_COL, date);
+  if (hit_(e.range, T.TODO_START, 1, T.TODO_N, T.MEMO_COL)) {
+    syncTodosFromSheet_(sh, T.TODO_START, 1, T.MEMO_COL, date, T.TODO_N);
     parts.todos = true;
   }
   if (hit_(e.range, T.HABIT_START, 1, CONFIG.HABIT_COUNT, 1)) {
@@ -218,8 +238,8 @@ function onTodayEdit_(e) {
     setMoodData_(date, moodScore_(sh.getRange(T.MOOD, 2).getValue()), sh.getRange(T.MOOD_MEMO, 2).getValue());
     parts.mood = true;
   }
-  if (hit_(e.range, T.MUST_START, 1, CONFIG.MUST_COUNT, 3)) {
-    syncMustFromSheet_(sh, mondayOf_(date), T.MUST_START, 1, 2);
+  if (hit_(e.range, T.MUST_START, 1, T.MUST_N, 3)) {
+    syncMustFromSheet_(sh, mondayOf_(date), T.MUST_START, 1, 2, T.MUST_N);
     markWeekGoalsDirty_(mondayOf_(date));
     parts.must = true;
   }

@@ -51,7 +51,22 @@ class Sheet {
   getLastRow() { countRead(); let m = 0; for (const k of this.cells.keys()) m = Math.max(m, +k.split(',')[0]); return m; }
   getMaxRows() { return this.maxRows; }
   getMaxColumns() { return this.maxCols; }
-  insertRowsAfter(_, n) { countWrite('struct'); this.maxRows += n; }
+  insertRowsAfter(row, n) { countWrite('struct'); this.shiftRows(row + 1, n); }
+  insertRowsBefore(row, n) { countWrite('struct'); this.shiftRows(row, n); }
+  /** from 행부터 아래를 n줄 밀기 (값·검증) */
+  shiftRows(from, n) {
+    const move = (map) => {
+      const next = new Map();
+      for (const [k, v] of map) {
+        const [r, c] = k.split(',').map(Number);
+        next.set((r >= from ? r + n : r) + ',' + c, v);
+      }
+      return next;
+    };
+    this.cells = move(this.cells);
+    this.dv = move(this.dv);
+    this.maxRows += n;
+  }
   insertColumnsAfter(_, n) { this.maxCols += n; }
   deleteRows(start, n) {
     countWrite('struct');

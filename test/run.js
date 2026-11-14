@@ -91,34 +91,74 @@ test('시트에서 할 일 내용을 지우면 그 메모도 삭제, 메모는 �
   same(dayOf(boot(env).week, '2026-11-11').todos, [[false, '', 'B', 'B 메모', '']]);
   same(sh.getRange(w.TODO_START, w.memoCol(2), 2, 1).getValues(), [['B 메모'], ['']], '남은 메모 없음');
 });
-test('할 일 12개 → 시트는 10줄 + "+2개 더", 웹앱은 12개 전부, 완료율은 전체 기준', () => {
+test('할 일이 늘면 시트 줄이 자동으로 늘고(빈 줄 2개 유지) 아래 칸은 같이 밀림, "+N개 더" 없음', () => {
   const env = envAt(2026, 11, 11);
-  const rows = Array.from({ length: 12 }, (_, i) => [i < 3, '', '할 일 ' + (i + 1), '', '']);
-  const res = env.ctx.webSetTodos('2026-11-11', rows);
-  assert.strictEqual(res.day.todos.length, 12);
-  assert.ok(sheetTodos(env, 2).every((r) => r[2]), '10줄 모두 채워짐');
-  const w = W(env);
-  assert.strictEqual(ws(env).getRange(w.COUNT, w.checkCol(2)).getValue(), '3 완료 · 9 남음 · +2개 더');
-  assert.strictEqual(ws(env).getRange(w.RATE, w.checkCol(2)).getValue(), '◔  25%');
-  assert.strictEqual(ts(env).getRange(T(env).TODO_MORE, 1).getValue(), '+2개 더 (웹앱에서 전부 보기)');
-  assert.strictEqual(ts(env).getRange(T(env).TODO_HEADER, 1).getValue(), '오늘 할 일   3 / 12');
-  // 시트에서 보이는 줄을 고쳐도 안 보이는 2개는 그대로
-  ws(env).getRange(w.TODO_START + 3, w.checkCol(2)).setValue(true);
-  edit(env, ws(env), w.TODO_START + 3, w.checkCol(2));
-  const day = dayOf(boot(env).week, '2026-11-11');
-  assert.strictEqual(day.todos.length, 12);
-  assert.strictEqual(day.todos.filter((r) => r[0]).length, 4);
-  assert.strictEqual(archiveRows(env).filter((r) => r.cat === '할일').length, 12, '기록도 개수 제한 없음');
+  env.ctx.webSetHabit('2026-11-11', '운동 30분', true);
+  env.ctx.webSetMood('2026-11-11', 4, '좋음');
+  const rows = Array.from({ length: 12 }, (_, i) => [i < 3, '', '할 일 ' + (i + 1), i === 11 ? '마지막 메모' : '', '']);
+  env.ctx.webSetTodos('2026-11-11', rows);
+  const w = W(env), sh = ws(env);
+  assert.strictEqual(w.TODO_N, 14, '12개 + 빈 줄 2개');
+  const block = sh.getRange(w.TODO_START, w.checkCol(2), w.TODO_N, 3).getValues();
+  assert.strictEqual(block.filter((r) => r[2]).length, 12, '12개 모두 보임');
+  same(block.slice(12), [[false, '', ''], [false, '', '']], '맨 아래 빈 줄 2개');
+  assert.strictEqual(sh.getRange(w.TODO_START + 11, w.memoCol(2)).getValue(), '', '메모도 같은 줄 (정렬 후 체크된 일은 아래)');
+  assert.strictEqual(sh.getRange(w.COUNT, w.checkCol(2)).getValue(), '3 완료 · 9 남음', '"+N개 더" 없음');
+  assert.strictEqual(sh.getRange(w.MOOD, w.checkCol(2)).getValue(), '4 🙂', '기분 칸이 아래로 밀린 자리에 그대로');
+  assert.strictEqual(sh.getRange(w.MOOD_MEMO, w.checkCol(2)).getValue(), '좋음');
+  assert.strictEqual(sh.getRange(w.HABIT_START + 1, w.HABIT_DAY_COL + 2).getValue(), true, '습관은 위쪽이라 그대로');
+  // 오늘 시트도
+  const t = T(env), today = ts(env);
+  assert.strictEqual(t.TODO_N, 14);
+  assert.strictEqual(today.getRange(t.TODO_START, 1, t.TODO_N, 3).getValues().filter((r) => r[2]).length, 12);
+  assert.strictEqual(today.getRange(t.TODO_HEADER, 1).getValue(), '오늘 할 일   3 / 12');
+  assert.strictEqual(today.getRange(t.HABIT_START + 1, 1).getValue(), true, '습관 칸이 밀린 자리에');
+  assert.strictEqual(today.getRange(t.MOOD, 2).getValue(), '4 🙂', '기분 칸이 밀린 자리에');
+  assert.strictEqual(today.getRange(t.ADD.check, 1).getValue() === true, false, '일정 추가 칸도 같이 밀림');
 });
-test('꼭 끝낼 일도 개수 제한 없음 → 시트는 5줄 + "+N개 더"', () => {
+test('시트에서 새로 생긴 빈 줄에 적은 할 일 → 저장소·웹앱 반영, 줄이 또 늘어남', () => {
   const env = envAt(2026, 11, 11);
-  const res = env.ctx.webSetMust('2026-11-09', Array.from({ length: 7 }, (_, i) => [i === 0, '목표 ' + (i + 1)]));
+  env.ctx.webSetTodos('2026-11-11', Array.from({ length: 10 }, (_, i) => [false, '', 'A' + i, '', '']));
+  const w = W(env), sh = ws(env);
+  assert.strictEqual(w.TODO_N, 12);
+  sh.getRange(w.TODO_START + 10, w.checkCol(2), 1, 3).setValues([[false, '9-10', '11번째 할 일']]); // 11번째 줄 (새 빈 줄)
+  sh.getRange(w.TODO_START + 10, w.memoCol(2)).setValue('새 줄 메모');
+  edit(env, sh, w.TODO_START + 10, w.checkCol(2), 1, 3);
+  const day = dayOf(boot(env).week, '2026-11-11');
+  assert.strictEqual(day.todos.length, 11);
+  same(day.todos[0], [false, '09:00-10:00', '11번째 할 일', '새 줄 메모', ''], '시간 있는 일이 맨 위로, 메모 함께');
+  assert.strictEqual(W(env).TODO_N, 13, '빈 줄 2개 유지');
+  // 오늘 시트 새 줄에 적어도
+  const t = T(env);
+  ts(env).getRange(t.TODO_START + 11, 3).setValue('오늘 시트에서 12번째');
+  edit(env, ts(env), t.TODO_START + 11, 3);
+  assert.strictEqual(dayOf(boot(env).week, '2026-11-11').todos.length, 12);
+  assert.strictEqual(T(env).TODO_N, 14);
+  assert.strictEqual(W(env).TODO_N, 14);
+});
+test('할 일이 줄면 다시 기본 10줄, 꼭 끝낼 일도 늘었다가 기본 5줄로 (아래 칸은 제자리로)', () => {
+  const env = envAt(2026, 11, 11);
+  env.ctx.webSetMood('2026-11-11', 5, '');
+  env.ctx.webSetTodos('2026-11-11', Array.from({ length: 15 }, (_, i) => [false, '', 'T' + i, '', '']));
+  let res = env.ctx.webSetMust('2026-11-09', Array.from({ length: 7 }, (_, i) => [i === 0, '목표 ' + (i + 1)]));
   assert.strictEqual(res.weekPart.must.length, 7);
-  const w = W(env);
-  assert.strictEqual(ws(env).getRange(w.MUST_START + 4, 2).getValue(), '목표 5');
-  assert.strictEqual(ws(env).getRange(w.MUST_PROGRESS, w.MUST_WIDTH - 1).getValue(), '14% · +2개 더');
-  assert.strictEqual(ts(env).getRange(T(env).MUST_HEADER, 1).getValue(), '이번 주 꼭 끝낼 일   +2개 더');
-  assert.strictEqual(archiveRows(env).filter((r) => r.cat === '주간목표').length, 7);
+  let w = W(env);
+  same([w.TODO_N, w.MUST_N, w.DAY_HEADER], [17, 9, 17], '꼭 끝낼 일이 늘면 요일 칸 전체가 4줄 밀림');
+  assert.strictEqual(ws(env).getRange(w.MUST_START + 6, 2).getValue(), '목표 7');
+  assert.strictEqual(ws(env).getRange(w.MUST_PROGRESS, w.MUST_WIDTH - 1).getValue(), '14%', '"+N개 더" 없음');
+  assert.strictEqual(ws(env).getRange(w.TODO_START + 14, w.textCol(2)).getValue(), 'T14', '할 일도 밀린 자리에');
+  assert.strictEqual(ws(env).getRange(w.MOOD, w.checkCol(2)).getValue(), '5 😄');
+  assert.strictEqual(ts(env).getRange(T(env).MUST_START + 6, 2).getValue(), '목표 7');
+  assert.strictEqual(T(env).MUST_N, 9);
+  // 줄이기
+  env.ctx.webSetTodos('2026-11-11', [[false, '', '하나만', '', '']]);
+  env.ctx.webSetMust('2026-11-09', [[false, '목표 하나']]);
+  w = W(env);
+  same([w.TODO_N, w.MUST_N, w.DAY_HEADER, w.MOOD], [10, 5, 13, 29], '기본 줄 수·원래 위치');
+  same(sheetTodos(env, 2).slice(0, 2), [[false, '', '하나만'], [false, '', '']]);
+  assert.strictEqual(ws(env).getRange(w.MOOD, w.checkCol(2)).getValue(), '5 😄', '기분 칸도 원래 자리에');
+  same([T(env).TODO_N, T(env).MUST_N], [10, 5]);
+  assert.strictEqual(ts(env).getRange(T(env).MOOD, 2).getValue(), '5 😄');
 });
 test('습관·기분: 시트 ↔ 웹앱', () => {
   const env = envAt(2026, 11, 11);
