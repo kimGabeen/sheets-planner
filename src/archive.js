@@ -54,37 +54,32 @@ function replaceArchive_(keys, rows) {
   if (last > 2) sh.getRange(2, 1, last - 1, 6).sort([{ column: 1, ascending: true }, { column: 2, ascending: true }]);
 }
 
-/** 위클리의 하루치(할 일·습관·기분)를 기록 행으로 만들기 */
+/**
+ * 저장소의 하루치(할 일·습관·기분·일정 체크) → 기록 행 (개수 제한 없음)
+ * 할 일: "미완"(넘겨진 원래 일)은 FALSE + 값 "이월" / 일정: 구분 "일정", 시간표 수업: 구분 "수업"
+ */
 function buildDayRows_(date) {
-  const L = WEEKLY, C = CONFIG.CATEGORY, sh = sheet_(CONFIG.SHEETS.WEEKLY);
-  const d = weeklyIndexOf_(date);
-  if (d < 0) return [];
-  const wk = weekKey_(date);
+  const C = CONFIG.CATEGORY, wk = weekKey_(date);
   const rows = [];
-
-  // 할 일: "미완 →"(넘겨진 원래 일)은 FALSE + 값 "이월", 표시 기호는 떼고 저장
-  sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 3).getValues().forEach(function (r) {
-    const raw = String(r[2]).trim();
-    if (!raw) return;
-    const missed = isMissed_(raw);
-    rows.push([date, C.TODO, stripCarry_(raw), missed ? false : r[0] === true, missed ? CONFIG.CARRY.VALUE : '', wk]);
+  getTodos_(date).forEach(function (t) {
+    const missed = t.flag === CARRY_FLAG_.MISSED;
+    rows.push([date, C.TODO, t.text, missed ? false : t.done, missed ? CONFIG.CARRY.VALUE : '', wk]);
   });
-
-  const checks = sh.getRange(L.HABIT_START, L.HABIT_DAY_COL + d, CONFIG.HABIT_COUNT, 1).getValues();
-  getHabits_().forEach(function (name, i) {
-    if (name) rows.push([date, C.HABIT, name, checks[i][0] === true, '', wk]);
+  const day = getDayData_(date);
+  getHabits_().forEach(function (name) {
+    if (name) rows.push([date, C.HABIT, name, !!day.habits[name], '', wk]);
   });
-
-  const score = moodScore_(sh.getRange(L.MOOD, L.checkCol(d)).getValue());
-  const memo = String(sh.getRange(L.MOOD_MEMO, L.checkCol(d)).getValue()).trim();
-  if (score || memo) rows.push([date, C.MOOD, memo, '', score, wk]); // 기분: 항목=메모, 값=점수
+  if (day.mood.score || day.mood.memo) rows.push([date, C.MOOD, day.mood.memo, '', day.mood.score, wk]); // 기분: 항목=메모, 값=점수
+  scheduleOf_(date, day).forEach(function (it) {
+    rows.push([date, it.kind === 'tt' ? C.CLASS : C.SCHEDULE, it.text, it.done, '', wk]);
+  });
   return rows;
 }
 
 /** 하루치 덮어쓰기 키 */
 function dayKeys_(date) {
   const C = CONFIG.CATEGORY;
-  return [{ date: date, cat: C.TODO }, { date: date, cat: C.HABIT }, { date: date, cat: C.MOOD }];
+  return [C.TODO, C.HABIT, C.MOOD, C.SCHEDULE, C.CLASS].map(function (cat) { return { date: date, cat: cat }; });
 }
 
 /** 편집 즉시 그날 기록 갱신 (미래 날짜는 밤에 저장) */
@@ -93,15 +88,11 @@ function archiveDayLive_(date) {
   replaceArchive_(dayKeys_(date), buildDayRows_(date));
 }
 
-/** 이번 주 꼭 끝낼 일 → 주간목표 (날짜 = 그 주 월요일) */
-function weekGoalRows_() {
-  const sh = sheet_(CONFIG.SHEETS.WEEKLY), L = WEEKLY;
-  const mon = weeklyMonday_();
-  if (!mon) return { keys: [], rows: [] };
-  const rows = [];
-  sh.getRange(L.MUST_START, 1, CONFIG.MUST_COUNT, 2).getValues().forEach(function (r) {
-    const text = String(r[1]).trim();
-    if (text) rows.push([mon, CONFIG.CATEGORY.WEEK_GOAL, text, r[0] === true, '', dateKey_(mon)]);
+/** 그 주 꼭 끝낼 일 → 주간목표 (날짜 = 그 주 월요일) */
+function weekGoalRows_(monday) {
+  const mon = mondayOf_(monday || today_());
+  const rows = getWeekData_(mon).must.map(function (m) {
+    return [mon, CONFIG.CATEGORY.WEEK_GOAL, m.text, m.done, '', dateKey_(mon)];
   });
   return { keys: [{ date: mon, cat: CONFIG.CATEGORY.WEEK_GOAL }], rows: rows };
 }
@@ -120,9 +111,9 @@ function monthGoalRows_() {
   return { keys: [{ date: first, cat: CONFIG.CATEGORY.MONTH_GOAL }], rows: rows };
 }
 
-/** 주간목표만 저장 */
-function archiveWeekGoals_() {
-  const g = weekGoalRows_();
+/** 주간목표만 저장 (monday 없으면 이번 주) */
+function archiveWeekGoals_(monday) {
+  const g = weekGoalRows_(monday);
   replaceArchive_(g.keys, g.rows);
 }
 
@@ -132,28 +123,26 @@ function archiveMonthGoals_() {
   replaceArchive_(g.keys, g.rows);
 }
 
-/** 위클리 주의 월요일 ~ until까지 하루치 + 주간·월간 목표 저장 → 저장한 행 수 */
-function saveWeek_(until) {
-  const mon = weeklyMonday_();
-  if (!mon) return 0;
+/** from ~ to 하루치 저장 (오늘 이후는 건너뜀) → 저장한 행 수 */
+function saveRange_(from, to) {
   let keys = [], rows = [];
-  for (let d = 0; d < 7; d++) {
-    const date = addDays_(mon, d);
-    if (date > until) break;
-    keys = keys.concat(dayKeys_(date));
-    rows = rows.concat(buildDayRows_(date));
+  const today = today_();
+  for (let d = from; d <= to && d <= today; d = addDays_(d, 1)) {
+    keys = keys.concat(dayKeys_(d));
+    rows = rows.concat(buildDayRows_(d));
   }
-  [weekGoalRows_(), monthGoalRows_()].forEach(function (g) {
-    keys = keys.concat(g.keys);
-    rows = rows.concat(g.rows);
-  });
   replaceArchive_(keys, rows);
   return rows.length;
 }
 
-/** 지금까지(오늘 포함) 전부 저장 */
+/** 이번 주 월요일 ~ 오늘 + 이번 주 꼭 끝낼 일 + 이번 달 목표 저장 */
 function saveAll_() {
-  const n = saveWeek_(today_());
+  const today = today_();
+  let n = saveRange_(mondayOf_(today), today);
+  [weekGoalRows_(today), monthGoalRows_()].forEach(function (g) {
+    replaceArchive_(g.keys, g.rows);
+    n += g.rows.length;
+  });
   setStatus_('save', '✓ ' + n + '행');
   return n;
 }

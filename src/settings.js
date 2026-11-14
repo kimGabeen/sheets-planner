@@ -135,24 +135,22 @@ function setTimetable_(tt) {
 
 /**
  * 습관 목록 저장 (웹앱 편집): list = [{name, from(예전 순서 번호 또는 null)}]
- * 위클리 체크도 습관을 따라 함께 옮김. 기록 시트의 예전 기록은 건드리지 않음
+ * 체크는 저장소에 습관 이름으로 저장되므로, 이름을 바꾸면 이번 주부터의 체크를 새 이름으로 옮김
+ * 지난 기록(지난주 이전 저장소·기록 시트)은 예전 이름 그대로 둠
  */
 function setHabits_(list) {
   if (list.length > CONFIG.HABIT_COUNT) throw new Error('습관은 최대 ' + CONFIG.HABIT_COUNT + '개예요');
-  const set = sheet_(CONFIG.SHEETS.SETTINGS), W = WEEKLY, n = CONFIG.HABIT_COUNT;
-  const weekly = sheet_(CONFIG.SHEETS.WEEKLY);
-  const checks = weekly.getRange(W.HABIT_START, W.HABIT_DAY_COL, n, 7).getValues();
-  const names = [], moved = [];
-  for (let i = 0; i < n; i++) {
-    const h = list[i];
-    names.push([h ? String(h.name).trim() : '']);
-    const from = h && h.from !== null && h.from !== undefined ? Number(h.from) : -1;
-    moved.push(from >= 0 && from < n ? checks[from].map(function (v) { return v === true; }) : [false, false, false, false, false, false, false]);
-  }
+  const set = sheet_(CONFIG.SHEETS.SETTINGS), n = CONFIG.HABIT_COUNT;
+  const before = getHabits_();
+  const names = [];
+  for (let i = 0; i < n; i++) names.push([list[i] ? String(list[i].name).trim() : '']);
+  const mon = mondayOf_(today_());
+  list.forEach(function (h) {
+    const old = h.from !== null && h.from !== undefined ? before[h.from] : '';
+    if (old && old !== h.name) renameHabitFrom_(mon, old, h.name);
+  });
   set.getRange(SETTINGS.HABIT_START, 2, n, 1).setValues(names);
-  weekly.getRange(W.HABIT_START, W.HABIT_DAY_COL, n, 7).setValues(moved);
 }
-
 /** 타임라인 카테고리 목록 [{name, color}] (이름 없는 줄은 제외) */
 function getCategories_() {
   const sh = sheet_(CONFIG.SHEETS.SETTINGS);

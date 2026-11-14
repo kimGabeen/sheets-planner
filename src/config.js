@@ -22,7 +22,12 @@ const CONFIG = {
     SETTINGS: '설정',
     EVENTS: '_일정', // 숨김: 캘린더 일정 + 달력 메모 저장소
     TIMELINE: '타임라인', // 웹앱 타임라인 기록 (날짜 | 시작 | 카테고리)
+    // 날짜별 저장소 (위클리·오늘 시트는 이 저장소를 보여 주는 화면)
+    TODO_STORE: '할일저장소', // 날짜 | 순서 | 완료 | 시작 | 끝 | 내용 | 메모 | 이월표시
+    DAY_STORE: '하루저장소', // 날짜 | 구분(습관/기분/일정체크) | 항목 | 값
+    WEEK_STORE: '주간저장소', // 주차(월요일) | 구분(목표/보상/확언/꼭끝낼일) | 순서 | 완료 | 내용
   },
+  STORE_VERSION: '1', // 저장소 구조 버전 (없으면 예전 데이터를 옮김)
 
   // 타임라인 (웹앱): 10분 칸, 카테고리는 설정 시트에서 변경
   TIMELINE: {
@@ -59,6 +64,8 @@ const CONFIG = {
     WEEK_GOAL: '주간목표',
     MONTH_GOAL: '월간목표',
     MOOD: '기분',
+    SCHEDULE: '일정', // 일정 완료 체크
+    CLASS: '수업', // 시간표 수업 완료 체크
   },
   ARCHIVE_HEADERS: ['날짜', '구분', '항목', '완료여부', '값', '주차'],
 
@@ -222,8 +229,9 @@ const TODAY = (function () {
   L.SYNC_ROW = r + 1; L.SYNC_RESULT = r + 2;
   L.SAVE_ROW = r + 3; L.SAVE_RESULT = r + 4;
   r += 6;
-  L.OVERFLOW_HEADER = r; L.OVERFLOW_START = r + 1; // 맨 아래: 빈 줄이 없어 못 넘어간 일
-  L.LAST_ROW = L.OVERFLOW_START + CONFIG.TODO_ROWS - 1;
+  L.LAST_ROW = r - 1;
+  L.OLD_OVERFLOW_ROWS = CONFIG.TODO_ROWS + 1; // 예전 "넘어온 일" 칸 (지금은 없음 → 비움)
+  L.TODO_MORE = L.TODO_START + CONFIG.TODO_ROWS; // 할 일 10개 넘으면 "+N개 더"를 보여 줄 줄
   L.MEMO_COL = 4; // 숨김: 할 일 메모 (D열, 할 일과 같은 줄)
   return L;
 })();
@@ -261,7 +269,7 @@ const SETTINGS = {
   HABIT_START: 6,
   PRESET_ROW: 17,
   STATUS_HEADER: 19,
-  STATUS: { setup: 20, save: 21, sync: 22, week: 23, carry: 24, error: 25 },
+  STATUS: { setup: 20, save: 21, sync: 22, week: 23, carry: 24, error: 25, store: 26 },
   CAT_HEADER: 27, // 타임라인 카테고리 (이름 | 색)
   CAT_START: 28,
   TT_HEADER: 37, // 고정 시간표 (요일 | 시작 | 끝 | 이름)

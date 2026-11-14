@@ -13,10 +13,15 @@ function setup() {
   PropertiesService.getScriptProperties().setProperty('SPREADSHEET_ID', ss.getId());
 
   // 1) 데이터 시트 (있으면 그대로 둠)
+  const hadWeekly = !!sheet_(CONFIG.SHEETS.WEEKLY);
   const theme = buildSettings_();
   buildEventsSheet_();
   buildArchive_(theme);
   buildTimelineSheet_(theme);
+  buildStoreSheets_(theme);
+  // 날짜별 저장소: 처음 설치면 옮길 것이 없고, 예전 시트가 있으면 백업 후 옮김 (아래에서 화면을 다시 그림)
+  if (!hadWeekly) props_().setProperty('STORE_VERSION', CONFIG.STORE_VERSION);
+  else ensureStore_(true);
 
   // 2) 화면 시트
   buildAllLayouts_(theme);
@@ -24,6 +29,7 @@ function setup() {
   // 3) 처음 값 채우기 (비어 있을 때만)
   initDefaults_();
   arrangeSheets_();
+  renderWeekView_(); // 주 시작 날짜가 막 채워졌을 수 있으므로 다시 그림
 
   // 4) 데이터 불러오기·맞추기
   try {
@@ -74,7 +80,7 @@ function initDefaults_() {
 /** 시트 순서 정리 + 처음 생긴 빈 기본 시트 삭제 */
 function arrangeSheets_() {
   const ss = ss_(), S = CONFIG.SHEETS;
-  const order = [S.WEEKLY, S.TODAY, S.MONTHLY, S.LASTWEEK, S.ARCHIVE, S.TIMELINE, S.SETTINGS, S.EVENTS];
+  const order = [S.WEEKLY, S.TODAY, S.MONTHLY, S.LASTWEEK, S.ARCHIVE, S.TODO_STORE, S.DAY_STORE, S.WEEK_STORE, S.TIMELINE, S.SETTINGS, S.EVENTS];
   ss.getSheets().forEach(function (sh) {
     const n = sh.getName();
     if (order.indexOf(n) < 0 && sh.getLastRow() === 0 && /^(시트|Sheet)\d+$/.test(n)) ss.deleteSheet(sh);

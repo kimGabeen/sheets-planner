@@ -242,6 +242,7 @@ function withLock_(fn, readOnly) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
+    ensureStore_(); // 새 저장소로 아직 안 옮겼으면 먼저 (백업 → 옮기기)
     const out = fn();
     if (!readOnly) bumpCache_();
     return out;
@@ -255,7 +256,8 @@ function withLock_(fn, readOnly) {
 
 /** 캐시 버전 올리기 (모든 캐시 무효화) */
 function bumpCache_() {
-  try { CacheService.getScriptCache().put('ver', String(Date.now()), 21600); } catch (err) { /* 캐시 실패해도 동작 */ }
+  // 같은 밀리초에 두 번 바뀌어도 버전이 달라지게 무작위 값을 붙임
+  try { CacheService.getScriptCache().put('ver', Date.now() + '-' + Math.random().toString(36).slice(2, 8), 21600); } catch (err) { /* 캐시 실패해도 동작 */ }
 }
 
 /** 캐시에 있으면 그 값, 없으면 make()로 만들어 저장 (10분) */

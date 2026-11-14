@@ -50,9 +50,8 @@ function buildToday_(theme) {
 
   // 오늘 할 일 10줄: 체크 | 시간(선택) | 내용
   const tEnd = T.TODO_START + n - 1;
-  header(T.TODO_HEADER, '오늘 할 일',
-    'COUNTIFS(A' + T.TODO_START + ':A' + tEnd + ',TRUE,C' + T.TODO_START + ':C' + tEnd + ',"?*")&" / "&COUNTIF(C' +
-    T.TODO_START + ':C' + tEnd + ',"?*")');
+  header(T.TODO_HEADER, '오늘 할 일'); // 개수는 renderTodayView_가 전체 기준으로
+  sh.getRange(T.TODO_MORE, 1, 1, 3).merge().setFontColor(C.SUB).setFontSize(9).setHorizontalAlignment('right');
   checkbox_(sh.getRange(T.TODO_START, 1, n, 1));
   sh.getRange(T.TODO_START, 2, n, 1).setNumberFormat('@').setHorizontalAlignment('center')
     .setFontSize(10).setFontColor(theme);
@@ -101,11 +100,8 @@ function buildToday_(theme) {
       sh.getRange(a[1], 2, 1, 2).merge().setFontColor(C.SUB).setFontSize(9);
     });
 
-  // 넘어온 일 (빈 줄이 없어 할 일에 못 들어간 전날 미완료)
-  header(T.OVERFLOW_HEADER, '넘어온 일 (할 일 칸이 꽉 차서 못 들어간 일)');
-  for (let i = 0; i < n; i++) {
-    sh.getRange(T.OVERFLOW_START + i, 1, 1, 3).merge().setFontColor(C.SUB).setFontSize(10);
-  }
+  // 예전 "넘어온 일" 칸은 없앰 (전날 미완료는 전부 그날 할 일로 넘어감)
+  sh.getRange(T.LAST_ROW + 1, 1, T.OLD_OVERFLOW_ROWS, 3).clearContent().setBackground(null).setBorder(false, false, false, false, false, false);
 
   // 조건부 서식: 체크하면 취소선, 미완 회색, 습관 체크 배경, 기분 배경
   const missed = CONFIG.CARRY.MISSED.trim();
@@ -122,6 +118,7 @@ function buildToday_(theme) {
   ].concat(moodRules_(sh, [sh.getRange(T.MOOD, 1, 2, 3)],
     'IFERROR(VALUE(LEFT($B$' + T.MOOD + ',1)),0)', theme));
   sh.setConditionalFormatRules(rules);
+  if (props_().getProperty('STORE_VERSION') === CONFIG.STORE_VERSION) renderTodayView_();
 }
 
 /** 오늘 시트에 적힌 날짜 */
@@ -129,70 +126,44 @@ function todaySheetDate_() {
   return dateOnly_(sheet_(CONFIG.SHEETS.TODAY).getRange(TODAY.DATE_ROW, 1).getValue());
 }
 
-/**
- * 오늘 시트 ↔ 위클리 짝 목록 (d = 오늘의 요일 번호)
- * t: 오늘 시트 [행, 열], w: 위클리 [행, 열], n: 세로 칸 수
- * todo: 할 일 묶음, disp: 표시 글자로 복사 (시간 칸)
- */
-function todayBlocks_(d) {
-  const T = TODAY, W = WEEKLY;
-  return [
-    { t: [T.TODO_START, 1], w: [W.TODO_START, W.checkCol(d)], n: CONFIG.TODO_ROWS, todo: true },
-    { t: [T.TODO_START, 2], w: [W.TODO_START, W.timeCol(d)], n: CONFIG.TODO_ROWS, todo: true, disp: true },
-    { t: [T.TODO_START, 3], w: [W.TODO_START, W.textCol(d)], n: CONFIG.TODO_ROWS, todo: true },
-    { t: [T.TODO_START, T.MEMO_COL], w: [W.TODO_START, W.memoCol(d)], n: CONFIG.TODO_ROWS, todo: true },
-    { t: [T.HABIT_START, 1], w: [W.HABIT_START, W.HABIT_DAY_COL + d], n: CONFIG.HABIT_COUNT },
-    { t: [T.MUST_START, 1], w: [W.MUST_START, 1], n: CONFIG.MUST_COUNT },
-    { t: [T.MUST_START, 2], w: [W.MUST_START, 2], n: CONFIG.MUST_COUNT },
-    { t: [T.MOOD, 2], w: [W.MOOD, W.checkCol(d)], n: 1 },
-    { t: [T.MOOD_MEMO, 2], w: [W.MOOD_MEMO, W.checkCol(d)], n: 1 },
-  ];
-}
 
-/**
- * 짝 목록대로 값 복사 (from='t'면 오늘→위클리, 'w'면 위클리→오늘)
- * edited가 있으면 그 범위와 겹치는 묶음만 복사
- */
-function copyBlocks_(fromSheet, toSheet, blocks, from, edited) {
-  const to = from === 't' ? 'w' : 't';
-  blocks.forEach(function (b) {
-    if (edited && !hit_(edited, b[from][0], b[from][1], b.n, 1)) return;
-    ensureSize_(fromSheet, b[from][0] + b.n, b[from][1]);
-    ensureSize_(toSheet, b[to][0] + b.n, b[to][1]);
-    const src = fromSheet.getRange(b[from][0], b[from][1], b.n, 1);
-    const vals = b.disp ? src.getDisplayValues() : src.getValues();
-    toSheet.getRange(b[to][0], b[to][1], b.n, 1).setValues(vals);
-  });
-}
 
 /** 오늘 시트를 오늘 날짜로 바꾸고 위클리 값으로 다시 채우기 */
 function refreshToday_() {
-  const sh = sheet_(CONFIG.SHEETS.TODAY), T = TODAY;
-  const today = today_();
-  sh.getRange(T.DATE_ROW, 1).setValue(today);
-  const d = weeklyIndexOf_(today);
-  const blocks = todayBlocks_(Math.max(d, 0));
-  if (d >= 0) {
-    copyBlocks_(sheet_(CONFIG.SHEETS.WEEKLY), sh, blocks, 'w');
-  } else {
-    // 위클리가 아직 다른 주면 비워 둠 (새 주 시작 후 다시 채워짐)
-    blocks.forEach(function (b) { sh.getRange(b.t[0], b.t[1], b.n, 1).clearContent(); });
-  }
-  renderOverflow_();
+  sheet_(CONFIG.SHEETS.TODAY).getRange(TODAY.DATE_ROW, 1).setValue(today_());
+  renderTodayView_();
 }
 
-/** 맨 아래 "넘어온 일" 칸 채우기 (오늘 날짜로 저장된 것만) */
-function renderOverflow_() {
-  const sh = sheet_(CONFIG.SHEETS.TODAY), T = TODAY;
-  const saved = JSON.parse(props_().getProperty('CARRY_OVERFLOW') || '{}');
-  const items = saved.date === dateKey_(today_()) ? saved.items || [] : [];
-  const vals = [];
-  for (let i = 0; i < CONFIG.TODO_ROWS; i++) {
-    const it = items[i];
-    vals.push([it ? CONFIG.CARRY.CARRIED + (it.time ? it.time + ' ' : '') + it.text : (i === 0 ? '없음' : '')]);
+/**
+ * 저장소 → 오늘 시트 (적힌 날짜 기준)
+ * 할 일 10줄·꼭 끝낼 일 5줄까지 보이고 넘치면 "+N개 더", 개수·완료율은 전체 기준
+ */
+function renderTodayView_() {
+  const T = TODAY, sh = sheet_(CONFIG.SHEETS.TODAY), n = CONFIG.TODO_ROWS, m = CONFIG.MUST_COUNT;
+  const date = todaySheetDate_();
+  if (!date) return;
+  const list = getTodos_(date), day = getDayData_(date), week = getWeekData_(mondayOf_(date));
+  const rows = [], memos = [];
+  for (let i = 0; i < n; i++) {
+    const t = list[i];
+    rows.push(t ? [t.done, todoTime_(t), todoDisplay_(t)] : [false, '', '']);
+    memos.push([t ? t.memo : '']);
   }
-  sh.getRange(T.OVERFLOW_START, 1, vals.length, 1).setValues(vals);
+  sh.getRange(T.TODO_START, 1, n, 3).setValues(rows);
+  memoRange_(sh, T.TODO_START, T.MEMO_COL).setValues(memos);
+  const done = list.filter(function (t) { return t.done; }).length;
+  sh.getRange(T.TODO_HEADER, 1).setValue('오늘 할 일   ' + done + ' / ' + list.length);
+  sh.getRange(T.TODO_MORE, 1).setValue(list.length > n ? '+' + (list.length - n) + '개 더 (웹앱에서 전부 보기)' : '');
+  sh.getRange(T.HABIT_START, 1, CONFIG.HABIT_COUNT, 1)
+    .setValues(getHabits_().map(function (h) { return [!!(h && day.habits[h])]; }));
+  const must = [];
+  for (let i = 0; i < m; i++) must.push(week.must[i] ? [week.must[i].done, week.must[i].text] : [false, '']);
+  sh.getRange(T.MUST_START, 1, m, 2).setValues(must);
+  sh.getRange(T.MUST_HEADER, 1).setValue('이번 주 꼭 끝낼 일' + (week.must.length > m ? '   +' + (week.must.length - m) + '개 더' : ''));
+  sh.getRange(T.MOOD, 2).setValue(day.mood.score ? CONFIG.MOODS[day.mood.score - 1] : '');
+  sh.getRange(T.MOOD_MEMO, 2).setValue(day.mood.memo);
 }
+
 
 /** 오늘 시트 수정 시: 도구 실행 / 일정 추가 / 할 일 정렬 / 위클리에 반영 + 기록 저장 */
 function onTodayEdit_(e) {
@@ -218,19 +189,33 @@ function onTodayEdit_(e) {
     });
   }
 
-  // 오늘 시트에 적힌 날짜의 위클리 요일 칸으로 반영
+  // 오늘 시트에 적힌 날짜의 저장소로 반영 → 위클리 시트도 다시 그림
   const date = todaySheetDate_();
-  const d = weeklyIndexOf_(date);
-  if (d < 0) return;
-  const blocks = todayBlocks_(d);
-  const touched = blocks.some(function (b) { return hit_(e.range, b.t[0], b.t[1], b.n, 1); });
-  if (!touched) return;
-  const weekly = sheet_(CONFIG.SHEETS.WEEKLY);
-  if (hit_(e.range, T.TODO_START, 1, CONFIG.TODO_ROWS, 3)) {
-    sortTodos_(sh, T.TODO_START, 1, T.MEMO_COL); // 정렬로 줄이 움직이므로 할 일 묶음 전체 복사 (메모 포함)
-    copyBlocks_(sh, weekly, blocks.filter(function (b) { return b.todo; }), 't');
+  if (!date) return;
+  let changed = false;
+  if (hit_(e.range, T.TODO_START, 1, CONFIG.TODO_ROWS, T.MEMO_COL)) {
+    syncTodosFromSheet_(sh, T.TODO_START, 1, T.MEMO_COL, date);
+    changed = true;
   }
-  copyBlocks_(sh, weekly, blocks.filter(function (b) { return !b.todo; }), 't', e.range);
+  if (hit_(e.range, T.HABIT_START, 1, CONFIG.HABIT_COUNT, 1)) {
+    const checks = sh.getRange(T.HABIT_START, 1, CONFIG.HABIT_COUNT, 1).getValues();
+    const map = {};
+    getHabits_().forEach(function (n, i) { if (n) map[n] = checks[i][0] === true; });
+    setHabitsDone_(date, map);
+    changed = true;
+  }
+  if (hit_(e.range, T.MOOD, 2, 2, 2)) {
+    setMoodData_(date, moodScore_(sh.getRange(T.MOOD, 2).getValue()), sh.getRange(T.MOOD_MEMO, 2).getValue());
+    changed = true;
+  }
+  if (hit_(e.range, T.MUST_START, 1, CONFIG.MUST_COUNT, 3)) {
+    syncMustFromSheet_(sh, mondayOf_(date), T.MUST_START, 1, 2);
+    archiveWeekGoals_(mondayOf_(date));
+    changed = true;
+  }
+  if (!changed) return;
   archiveDayLive_(date);
-  if (hit_(e.range, T.MUST_START, 1, CONFIG.MUST_COUNT, 3)) archiveWeekGoals_();
+  renderTodayView_();
+  const d = weeklyIndexOf_(date);
+  if (d >= 0) renderWeekView_({ days: [d], habits: true, must: true });
 }
