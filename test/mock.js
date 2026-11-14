@@ -94,11 +94,13 @@ class Range {
 /** 목업 스프레드시트 + 서비스로 src/*.js를 불러온 실행 환경 만들기 */
 function createEnv() {
   const sheets = [];
+  const copies = []; // 백업 사본 이름
   const ss = chain({
     getSheetByName: (n) => sheets.find((s) => s.name === n) || null,
     insertSheet: (n) => { const s = new Sheet(n); sheets.push(s); return s; },
     getSheets: () => sheets.slice(),
     getId: () => 'test-sheet-id',
+    copy: (name) => { copies.push(name); return { getName: () => name }; },
     deleteSheet: (s) => sheets.splice(sheets.indexOf(s), 1),
   });
   const props = new Map(); // 스크립트 속성
@@ -174,7 +176,7 @@ function createEnv() {
   for (const f of fs.readdirSync(dir).filter((f) => f.endsWith('.js')).sort()) {
     vm.runInContext(fs.readFileSync(path.join(dir, f), 'utf8'), ctx, { filename: f });
   }
-  return { ctx, ss, props, docProps, holidays, triggers, events, cache, run: (code) => vm.runInContext(code, ctx) };
+  return { ctx, ss, props, docProps, holidays, copies, triggers, events, cache, run: (code) => vm.runInContext(code, ctx) };
 }
 
 module.exports = { createEnv, Sheet };
