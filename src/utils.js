@@ -220,6 +220,20 @@ function memoRange_(sh, row, col) {
   return sh.getRange(row, col, CONFIG.TODO_ROWS, 1);
 }
 
+/**
+ * 시트 데이터 전체를 한 번에 읽기 (머리글 제외, cols 칸으로 맞춤)
+ * getLastRow + getValues 두 번 대신 getDataRange 한 번
+ */
+function readAll_(sh, cols) {
+  if (!sh) return [];
+  const vals = sh.getDataRange().getValues();
+  return vals.slice(1).map(function (v) {
+    const row = v.slice(0, cols);
+    while (row.length < cols) row.push('');
+    return row;
+  });
+}
+
 /** 행 번호 목록(오름차순)을 연속 구간끼리 묶어 아래쪽부터 삭제 */
 function deleteRowList_(sh, rows) {
   if (!rows.length) return;
@@ -234,21 +248,69 @@ function deleteRowList_(sh, rows) {
   }
 }
 
+/* ---------- 실행 한 번 동안의 메모리 캐시 (같은 시트를 여러 번 읽지 않게) ---------- */
+
+let RUN_MEMO_ = {};
+
+/** 이번 실행에서 처음이면 make()로 읽고, 다음부터는 기억한 값 */
+function memo_(key, make) {
+  if (!Object.prototype.hasOwnProperty.call(RUN_MEMO_, key)) RUN_MEMO_[key] = make();
+  return RUN_MEMO_[key];
+}
+
+/** 그 값을 바꿨으니 다음에 다시 읽기 */
+function forget_(key) { delete RUN_MEMO_[key]; }
+
+/** 실행 시작·끝에 메모리 캐시 비우기 */
+function resetRunMemo_() {
+  RUN_MEMO_ = {};
+  STORE_MEMO_ = {};
+}
+
 /**
  * 스크립트 잠금을 잡고 함수 실행 (시트 편집·트리거·웹앱 동시 실행 방지)
  * readOnly가 아니면 끝난 뒤 서버 캐시를 무효화 (시트가 바뀌었을 수 있으므로)
  */
 function withLock_(fn, readOnly) {
   const lock = LockService.getScriptLock();
+  const t0 = Date.now(), name = callerName_();
   lock.waitLock(30000);
+  resetRunMemo_();
   try {
     ensureStore_(); // 새 저장소로 아직 안 옮겼으면 먼저 (백업 → 옮기기)
     const out = fn();
     if (!readOnly) bumpCache_();
+    // 처리 시간 기록 (속도 기록 화면용) — 웹앱 응답에는 _ms로도 붙임
+    const ms = Date.now() - t0;
+    if (name) recordPerf_(name, ms);
+    if (out && typeof out === 'object' && !Array.isArray(out) && name.indexOf('web') === 0) out._ms = ms;
     return out;
   } finally {
+    resetRunMemo_();
     lock.releaseLock();
   }
+}
+
+/* ---------- 처리 시간 기록 ---------- */
+
+/** 지금 실행 중인 웹앱 API·트리거 이름 (호출 스택에서) */
+function callerName_() {
+  try {
+    const m = String(new Error().stack).match(/at (web[A-Za-z]+|handleEdit|syncCalendarHourly|nightlyArchive|midnightJob)\b/);
+    return m ? m[1] : '';
+  } catch (err) {
+    return '';
+  }
+}
+
+/** 최근 80개 처리 시간을 캐시에 보관 (시트에 쓰지 않아 느려지지 않음) */
+function recordPerf_(name, ms) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const list = JSON.parse(cache.get('perf') || '[]');
+    list.push({ name: name, ms: ms, at: Date.now() });
+    cache.put('perf', JSON.stringify(list.slice(-80)), 21600);
+  } catch (err) { /* 기록 실패는 무시 */ }
 }
 
 /* ---------- 서버 캐시 (웹앱이 자주 읽는 데이터) ---------- */

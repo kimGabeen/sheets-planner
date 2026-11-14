@@ -302,7 +302,10 @@ function restoreWeekly_(sh, data) {
 /* ---------- 데이터 읽기·쓰기 ---------- */
 
 /** 위클리 시트가 보여주는 주의 월요일 (없으면 null) */
-function weeklyMonday_() {
+/** weeklyMonday_: 실행 한 번 동안 기억 */
+function weeklyMonday_() { return memo_('weeklyMonday', weeklyMondayRaw_); }
+
+function weeklyMondayRaw_() {
   const sh = sheet_(CONFIG.SHEETS.WEEKLY);
   const d = dateOnly_(sh.getRange(WEEKLY.WEEK_START.row, WEEKLY.WEEK_START.col).getValue());
   return d ? mondayOf_(d) : null;
@@ -342,6 +345,7 @@ function onWeeklyEdit_(e) {
   if (!mon) return;
   const todayKey = dateKey_(todaySheetDate_() || today_());
   let touchedToday = false;
+  const todayParts = {};
 
   for (let d = 0; d < 7; d++) {
     const date = addDays_(mon, d);
@@ -359,19 +363,25 @@ function onWeeklyEdit_(e) {
       setHabitsDone_(date, map);
     }
     archiveDayLive_(date);
-    renderWeekView_({ days: [d], habits: inHabit });
-    if (dateKey_(date) === todayKey) touchedToday = true;
+    // 할 일은 정렬이 바뀔 수 있어 다시 그림, 기분·습관은 사용자가 쓴 그대로라 위클리는 안 다시 그림
+    if (inTodo) renderWeekView_({ days: [d], todos: true });
+    if (dateKey_(date) === todayKey) {
+      touchedToday = true;
+      todayParts.todos = todayParts.todos || inTodo;
+      todayParts.mood = todayParts.mood || inMood;
+      todayParts.habits = todayParts.habits || inHabit;
+    }
   }
   if (hit_(e.range, L.MUST_START, 1, CONFIG.MUST_COUNT, L.MUST_WIDTH)) {
     syncMustFromSheet_(sh, mon, L.MUST_START, 1, 2);
-    archiveWeekGoals_(mon);
+    markWeekGoalsDirty_(mon);
     renderWeekView_({ days: [], must: true });
-    touchedToday = true;
+    if (weeklyIndexOf_(todaySheetDate_() || today_()) >= 0) { touchedToday = true; todayParts.must = true; }
   }
   if (hit_(e.range, L.GOAL_ROW, L.INFO_VALUE_COL, L.AFFIRM_ROW - L.GOAL_ROW + 1, 1)) {
     setWeekInfo_(mon, [L.GOAL_ROW, L.REWARD_ROW, L.AFFIRM_ROW].map(function (r) { return sh.getRange(r, L.INFO_VALUE_COL).getValue(); }));
   }
-  if (touchedToday) renderTodayView_();
+  if (touchedToday) renderTodayView_(todayParts);
 }
 
 /**
@@ -429,36 +439,71 @@ function renderWeekView_(parts) {
   const all = !parts;
   const P = parts || {};
   const days = all ? [0, 1, 2, 3, 4, 5, 6] : P.days || [];
-  const todos = todosByDate_(mon, addDays_(mon, 6));
-  const dayData = dayDataByDate_(mon, addDays_(mon, 6));
-  const habits = getHabits_();
+  // 요일만 주면 할 일·기분을 그림 (예전 호출 방식)
+  const doTodos = all || P.todos || (days.length && P.todos === undefined && P.mood === undefined && P.habits === undefined);
+  const doMood = all || P.mood || (days.length && P.todos === undefined && P.mood === undefined && P.habits === undefined);
+  const doHabits = all || P.habits;
+  const needTodos = doTodos && days.length, needDay = (doMood && days.length) || doHabits;
+  const todos = needTodos ? todosByDate_(mon, addDays_(mon, 6)) : {};
+  const dayData = needDay ? dayDataByDate_(mon, addDays_(mon, 6)) : {};
+  const habits = doHabits ? getHabits_() : [];
+  const first = L.checkCol(0), width = L.LAST_DAY_COL - first + 1;
 
-  days.forEach(function (d) {
-    const key = dateKey_(addDays_(mon, d)), list = todos[key] || [], day = dayData[key] || emptyDay_();
-    const shown = list.slice(0, n), rows = [], memos = [];
+  // 하루치 값: 할 일 10줄 + 합계 줄(3열), 메모, 완료율, 차트(완료·남음)
+  const dayBlock = function (d) {
+    const list = todos[dateKey_(addDays_(mon, d))] || [], rows = [], memos = [];
     for (let i = 0; i < n; i++) {
-      const t = shown[i];
+      const t = list[i];
       rows.push(t ? [t.done, todoTime_(t), todoDisplay_(t)] : [false, '', '']);
-      memos.push([t ? t.memo : '']);
+      memos.push(t ? t.memo : '');
     }
-    sh.getRange(L.TODO_START, L.checkCol(d), n, 3).setValues(rows);
-    memoRange_(sh, L.TODO_START, L.memoCol(d)).setValues(memos);
     const done = list.filter(function (t) { return t.done; }).length;
-    sh.getRange(L.RATE, L.checkCol(d)).setValue(rateText_(done, list.length));
-    sh.getRange(L.COUNT, L.checkCol(d)).setValue(done + ' 완료 · ' + (list.length - done) + ' 남음' +
-      (list.length > n ? ' · +' + (list.length - n) + '개 더' : ''));
-    sh.getRange(L.DAY_HEADER + 1 + d, L.CHART_DATA_COL + 1, 1, 2).setValues([[done, list.length - done]]);
-    sh.getRange(L.MOOD, L.checkCol(d), 2, 1).setValues([[day.mood.score ? CONFIG.MOODS[day.mood.score - 1] : ''], [day.mood.memo]]);
-    if (!all && !P.habits) return;
-    sh.getRange(L.HABIT_START, L.HABIT_DAY_COL + d, CONFIG.HABIT_COUNT, 1)
-      .setValues(habits.map(function (h) { return [!!(h && day.habits[h])]; }));
-  });
-  if (!all && P.habits && !days.length) {
-    for (let d = 0; d < 7; d++) {
-      const day = dayData[dateKey_(addDays_(mon, d))] || emptyDay_();
-      sh.getRange(L.HABIT_START, L.HABIT_DAY_COL + d, CONFIG.HABIT_COUNT, 1)
-        .setValues(habits.map(function (h) { return [!!(h && day.habits[h])]; }));
-    }
+    rows.push([done + ' 완료 · ' + (list.length - done) + ' 남음' + (list.length > n ? ' · +' + (list.length - n) + '개 더' : ''), '', '']);
+    return { rows: rows, memos: memos, rate: rateText_(done, list.length), chart: [done, list.length - done] };
+  };
+  const moodPair = function (d) {
+    const day = dayData[dateKey_(addDays_(mon, d))] || emptyDay_();
+    return [day.mood.score ? CONFIG.MOODS[day.mood.score - 1] : '', day.mood.memo];
+  };
+
+  if (doTodos && days.length === 7) {
+    // 7일을 한 번에: 할 일 영역·메모·완료율·차트를 각각 setValues 1번씩
+    const blocks = days.map(dayBlock);
+    const grid = [], rate = [], memo = [];
+    for (let r = 0; r <= n; r++) grid.push([].concat.apply([], blocks.map(function (b) { return b.rows[r]; })));
+    rate.push([].concat.apply([], blocks.map(function (b) { return [b.rate, '', '']; })));
+    for (let r = 0; r < n; r++) memo.push(blocks.map(function (b) { return b.memos[r]; }));
+    sh.getRange(L.TODO_START, first, n + 1, width).setValues(grid);
+    sh.getRange(L.RATE, first, 1, width).setValues(rate);
+    memoRange_(sh, L.TODO_START, L.MEMO_COL0 + 6);
+    sh.getRange(L.TODO_START, L.MEMO_COL0, n, 7).setValues(memo);
+    sh.getRange(L.DAY_HEADER + 1, L.CHART_DATA_COL + 1, 7, 2).setValues(blocks.map(function (b) { return b.chart; }));
+  } else if (doTodos) {
+    days.forEach(function (d) {
+      const b = dayBlock(d);
+      sh.getRange(L.TODO_START, L.checkCol(d), n + 1, 3).setValues(b.rows);
+      memoRange_(sh, L.TODO_START, L.memoCol(d)).setValues(b.memos.map(function (m) { return [m]; }));
+      sh.getRange(L.RATE, L.checkCol(d)).setValue(b.rate);
+      sh.getRange(L.DAY_HEADER + 1 + d, L.CHART_DATA_COL + 1, 1, 2).setValues([b.chart]);
+    });
+  }
+  if (doMood && days.length === 7) {
+    const row1 = [], row2 = [];
+    days.forEach(function (d) { const p = moodPair(d); row1.push(p[0], '', ''); row2.push(p[1], '', ''); });
+    sh.getRange(L.MOOD, first, 2, width).setValues([row1, row2]);
+  } else if (doMood) {
+    days.forEach(function (d) { const p = moodPair(d); sh.getRange(L.MOOD, L.checkCol(d), 2, 1).setValues([[p[0]], [p[1]]]); });
+  }
+  if (doHabits) {
+    // 습관은 7일 × 10개를 한 번에 (바뀐 날만이 아니라도 1번이면 충분)
+    sh.getRange(L.HABIT_START, L.HABIT_DAY_COL, CONFIG.HABIT_COUNT, 7).setValues(habits.map(function (h) {
+      const row = [];
+      for (let d = 0; d < 7; d++) {
+        const day = dayData[dateKey_(addDays_(mon, d))];
+        row.push(!!(h && day && day.habits[h]));
+      }
+      return row;
+    }));
   }
   if (all || P.must || P.info) {
     const week = getWeekData_(mon), m = CONFIG.MUST_COUNT;
@@ -471,9 +516,7 @@ function renderWeekView_(parts) {
       sh.getRange(L.MUST_PROGRESS, 2).setFormula('=SPARKLINE(' + p + ',{"charttype","bar";"max",1;"color1","' + getTheme_() + '"})');
       sh.getRange(L.MUST_PROGRESS, L.MUST_WIDTH - 1).setValue(Math.round(p * 100) + '%' + (total > m ? ' · +' + (total - m) + '개 더' : ''));
     }
-    if (all || P.info) {
-      [L.GOAL_ROW, L.REWARD_ROW, L.AFFIRM_ROW].forEach(function (r, i) { sh.getRange(r, L.INFO_VALUE_COL).setValue(week.info[i]); });
-    }
+    if (all || P.info) sh.getRange(L.GOAL_ROW, L.INFO_VALUE_COL, 3, 1).setValues(week.info.map(function (v) { return [v]; }));
   }
 }
 
@@ -510,6 +553,7 @@ function startNewWeek_() {
   }
   // 3) 날짜를 이번 주 월요일로 → 저장소에서 이번 주를 그림 (비우기 필요 없음)
   sh.getRange(L.WEEK_START.row, L.WEEK_START.col).setValue(cur);
+  forget_('weeklyMonday');
   renderWeekView_();
   return '새 주 시작 ✓ ' + dateKey_(cur);
 }

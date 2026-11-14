@@ -88,6 +88,7 @@ function scheduleOf_(date, day, byDate) {
 /** 하루 화면 데이터 (할 일 전체·습관·기분·일정·공휴일) — rev는 동시 수정 확인용 */
 function dayView_(date, todos, day, byDate, habits) {
   const key = dateKey_(date);
+  byDate = byDate || byDateFor_(date);
   const list = todos || getTodos_(date);
   const d = day || getDayData_(date);
   const rows = list.map(function (t) { return [t.done, todoTime_(t), t.text, t.memo, t.flag]; });
@@ -103,6 +104,12 @@ function dayView_(date, todos, day, byDate, habits) {
   return view;
 }
 
+/** 그 날짜가 든 달의 날짜별 일정 목록 (실행 동안 기억, _일정을 쓰면 다시 계산) */
+function byDateFor_(date) {
+  const k = 'byDate|' + date.getFullYear() + '-' + date.getMonth();
+  return memo_(k + '|' + (RUN_MEMO_.eventsVer || 0), function () { return scheduleByDate_(eventRowsAround_(date)); });
+}
+
 /** 내용으로 만든 짧은 버전 값 (다른 곳에서 바뀌었는지 비교) */
 function revOf_(obj) {
   const s = JSON.stringify([obj.todos, obj.habits, obj.mood, (obj.schedule || []).map(function (i) { return [i.key, i.done]; })]);
@@ -115,7 +122,7 @@ function revOf_(obj) {
 function weekData_(monday) {
   const mon = mondayOf_(monday), sun = addDays_(mon, 6);
   const todos = todosByDate_(mon, sun), days = dayDataByDate_(mon, sun);
-  const byDate = scheduleByDate_(eventRowsAround_(mon));
+  const byDate = byDateFor_(mon);
   const habits = getHabits_();
   const list = [];
   for (let d = 0; d < 7; d++) {
@@ -227,17 +234,22 @@ function monthData_(y, m) {
     c.holiday = e.holiday || '';
   });
 
+  // 기분·할 일·습관은 저장소에서 바로 (기록 시트 저장을 기다리지 않음), 월간 목표만 기록 시트
   const habits = getHabits_().filter(String);
   const habitDone = {};
+  const last = new Date(y, m - 1, days);
+  const todoMap = todosByDate_(first, last), dayMap = dayDataByDate_(first, last);
+  dates.forEach(function (c) {
+    const k = prefix + ('0' + c.day).slice(-2);
+    const list = todoMap[k] || [], d = dayMap[k];
+    c.todo = [list.filter(function (t) { return t.done; }).length, list.length];
+    if (!d) return;
+    c.mood = d.mood.score || '';
+    Object.keys(d.habits).forEach(function (n) { if (d.habits[n]) habitDone[n] = (habitDone[n] || 0) + 1; });
+  });
   const goals = [];
   readArchive_().forEach(function (r) {
-    const C = CONFIG.CATEGORY;
-    if (r.cat === C.MONTH_GOAL && r.key === firstKey) { goals.push([r.done === true, String(r.item)]); return; }
-    const cell = at(r.key);
-    if (!cell) return;
-    if (r.cat === C.MOOD) cell.mood = Number(r.value) || '';
-    else if (r.cat === C.TODO) { cell.todo[1]++; if (r.done === true) cell.todo[0]++; }
-    else if (r.cat === C.HABIT && r.done === true) habitDone[r.item] = (habitDone[r.item] || 0) + 1;
+    if (r.cat === CONFIG.CATEGORY.MONTH_GOAL && r.key === firstKey) goals.push([r.done === true, String(r.item)]);
   });
   while (goals.length < CONFIG.MONTH_GOALS) goals.push([false, '']);
 
@@ -263,12 +275,22 @@ function webGetTimeline(key) {
 
 /* ---------- 쓰기 (화면은 먼저 바뀌고, 여기서 뒤에서 저장) ---------- */
 
-/** 저장 뒤 시트 화면 다시 그리기 (그 날짜가 위클리·오늘 시트에 보이면) */
-function refreshSheetsFor_(date) {
+/**
+ * 저장 뒤 시트 화면 중 바뀐 부분만 다시 그리기 (그 날짜가 위클리·오늘 시트에 보이면)
+ * parts = {todos, habits, mood, must, info}
+ */
+function refreshSheetsFor_(date, parts) {
+  const P = parts || { todos: true, habits: true, mood: true, must: true, info: true };
   const d = weeklyIndexOf_(date);
-  if (d >= 0) renderWeekView_({ days: [d], habits: true, must: true, info: true });
+  if (d >= 0) {
+    if (P.todos || P.mood || P.habits) renderWeekView_({ days: [d], todos: !!P.todos, mood: !!P.mood, habits: !!P.habits });
+    if (P.must || P.info) renderWeekView_({ days: [], must: !!P.must, info: !!P.info });
+  }
   const t = todaySheetDate_();
-  if (t && (dateKey_(t) === dateKey_(date) || mondayOf_(t).getTime() === mondayOf_(date).getTime())) renderTodayView_();
+  if (!t) return;
+  const sameDay = dateKey_(t) === dateKey_(date), sameWeek = mondayOf_(t).getTime() === mondayOf_(date).getTime();
+  const tp = { todos: sameDay && !!P.todos, habits: sameDay && !!P.habits, mood: sameDay && !!P.mood, must: sameWeek && !!P.must };
+  if (tp.todos || tp.habits || tp.mood || tp.must) renderTodayView_(tp);
 }
 
 /**
@@ -285,8 +307,8 @@ function webSetTodos(key, rows, baseRev) {
       return { done: r[0] === true, start: t.start, end: t.end, text: r[2], memo: r[3], flag: r[4] || '' };
     }));
     archiveDayLive_(date);
-    refreshSheetsFor_(date);
-    return { week: weekData_(mondayOf_(date)), conflict: conflict };
+    refreshSheetsFor_(date, { todos: true });
+    return { day: dayView_(date), conflict: conflict };
   });
 }
 
@@ -296,8 +318,8 @@ function webSetHabit(key, name, done) {
     const date = dateOnly_(key);
     setHabitDone_(date, String(name), done === true);
     archiveDayLive_(date);
-    refreshSheetsFor_(date);
-    return { week: weekData_(mondayOf_(date)) };
+    refreshSheetsFor_(date, { habits: true });
+    return { day: dayView_(date) };
   });
 }
 
@@ -307,8 +329,8 @@ function webSetMood(key, score, memo) {
     const date = dateOnly_(key);
     setMoodData_(date, score, memo);
     archiveDayLive_(date);
-    refreshSheetsFor_(date);
-    return { week: weekData_(mondayOf_(date)) };
+    refreshSheetsFor_(date, { mood: true });
+    return { day: dayView_(date) };
   });
 }
 
@@ -317,9 +339,10 @@ function webSetMust(mondayKey, rows) {
   return withLock_(function () {
     const mon = mondayOf_(dateOnly_(mondayKey));
     setWeekMust_(mon, (rows || []).map(function (r) { return { done: r[0] === true, text: r[1] }; }));
-    if (mon <= today_()) archiveWeekGoals_(mon);
-    refreshSheetsFor_(mon);
-    return { week: weekData_(mon) };
+    markWeekGoalsDirty_(mon);
+    refreshSheetsFor_(mon, { must: true });
+    const w = getWeekData_(mon);
+    return { weekPart: { monday: dateKey_(mon), must: w.must.map(function (x) { return [x.done, x.text]; }) } };
   });
 }
 
@@ -328,8 +351,8 @@ function webSetWeekInfo(mondayKey, info) {
   return withLock_(function () {
     const mon = mondayOf_(dateOnly_(mondayKey));
     setWeekInfo_(mon, info || []);
-    refreshSheetsFor_(mon);
-    return { week: weekData_(mon) };
+    refreshSheetsFor_(mon, { info: true });
+    return { weekPart: { monday: dateKey_(mon), info: getWeekData_(mon).info } };
   });
 }
 
@@ -339,7 +362,7 @@ function webCheckItem(key, itemKey, done) {
     const date = dateOnly_(key);
     setItemCheck_(date, String(itemKey), done === true);
     archiveDayLive_(date);
-    return { week: weekData_(mondayOf_(date)) };
+    return { day: dayView_(date) };
   });
 }
 
@@ -411,26 +434,24 @@ function itemText_(shape) {
 
 /** 결과에 최신 위클리(+ 먼슬리) 붙이기 → 화면이 바로 갱신 */
 function withViews_(res, y, m, key) {
+  // 시트의 일정 칸은 수식이라 다시 그릴 필요 없음 → 바뀐 하루(+ 먼슬리에서 열었으면 그 달)만 돌려줌
   const date = dateOnly_(key) || today_();
-  refreshSheetsFor_(date);
-  res.week = weekData_(mondayOf_(date));
+  res.day = dayView_(date);
   res.month = y ? monthData_(y, m) : null;
   return res;
 }
 
 /** 캘린더 ID로 연동된 메모 줄들 고치기 (text가 null이면 삭제), memo = 숨김 메모 */
 function updateLinkedMemos_(id, text, memo) {
-  if (!id) return;
-  const rows = readEvents_();
-  let changed = false;
-  const out = rows.filter(function (r) {
-    if (r[1] !== CONFIG.EVENT_TYPE.MEMO || r[4] !== id) return true;
-    changed = true;
-    if (text === null) return false;
-    r[2] = text; r[3] = eventSortKey_(text); r[6] = memo || '';
-    return true;
-  });
-  if (changed) { writeEvents_(out); refreshMonthMemos_(); }
+  return function (rows) {
+    if (!id) return rows;
+    return rows.filter(function (r) {
+      if (r[1] !== CONFIG.EVENT_TYPE.MEMO || r[4] !== id) return true;
+      if (text === null) return false;
+      r[2] = text; r[3] = eventSortKey_(text); r[6] = memo || '';
+      return true;
+    });
+  };
 }
 
 /**
@@ -459,14 +480,13 @@ function webSaveItem(key, ref, item, y, m, requestId) {
         if (!cal.ok) return withViews_({ ok: false, message: cal.message }, y, m, key);
         const rows = readEvents_();
         rows.push([date, CONFIG.EVENT_TYPE.MEMO, text, eventSortKey_(text), cal.id, '연동', memo]);
-        writeEvents_(rows);
-        refreshMonthMemos_();
+        writeEvents_(rows); // 연동 메모는 먼슬리 메모 칸에 안 보이므로 메모 칸은 다시 안 그림
         res = { ok: true, message: '저장됨 ✓ · 구글 캘린더에도 추가' };
       } else if (ref.kind === 'cal') {
         const row = findItemRow_(eventRowsAround_(date), date, ref);
-        const up = updateCalendarEvent_(row[4], date, item.start, item.end, item.title, calendarTitles_(row[2]), memo);
+        const up = updateCalendarEvent_(row[4], date, item.start, item.end, item.title, calendarTitles_(row[2]), memo,
+          updateLinkedMemos_(row[4], text, memo)); // 캘린더 줄과 연동 메모를 시트에 한 번에
         if (!up.ok) throw new Error(up.found ? up.message : '구글 캘린더에서 찾지 못했어요 (이미 지워졌을 수 있어요)');
-        updateLinkedMemos_(row[4], text, memo);
         res = { ok: true, message: '수정됨 ✓ · 구글 캘린더에도 반영' };
       } else if (ref.kind === 'memo') {
         let id = findItemRow_(readEvents_(), date, ref)[4], msg = '수정됨 ✓';
@@ -500,10 +520,9 @@ function webDeleteItem(key, ref, y, m) {
     try {
       const row = findItemRow_(ref.kind === 'cal' ? eventRowsAround_(date) : readEvents_(), date, ref);
       if (ref.kind === 'cal') {
-        if (!deleteCalendarEvent_(row[4], date, calendarTitles_(row[2]))) {
+        if (!deleteCalendarEvent_(row[4], date, calendarTitles_(row[2]), updateLinkedMemos_(row[4], null))) {
           throw new Error('구글 캘린더에서 찾지 못했어요 (이미 지워졌을 수 있어요)');
         }
-        updateLinkedMemos_(row[4], null);
         res = { ok: true, message: '삭제됨 · 구글 캘린더에서도 삭제' };
       } else if (ref.kind === 'memo') {
         const gone = row[4] ? deleteCalendarEvent_(row[4], date, []) : false;
@@ -619,4 +638,13 @@ function webCleanDuplicates(expected) {
     refreshMonthMemos_();
     return { removed: removed, left: findDuplicates_().length };
   });
+}
+
+/** 속도 기록 (서버 쪽: 시트 편집·트리거 포함 최근 80개) */
+function webGetPerf() {
+  try {
+    return JSON.parse(CacheService.getScriptCache().get('perf') || '[]');
+  } catch (err) {
+    return [];
+  }
 }

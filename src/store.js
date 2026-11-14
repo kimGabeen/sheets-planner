@@ -43,9 +43,7 @@ function buildStoreSheets_(theme) {
 /** 저장소 전체 읽기 → [{row, key(날짜), v(값 배열)}] */
 function readStore_(name, cols) {
   if (STORE_MEMO_[name]) return STORE_MEMO_[name];
-  const sh = sheet_(name);
-  const last = sh ? sh.getLastRow() : 0;
-  const out = last < 2 ? [] : sh.getRange(2, 1, last - 1, cols).getValues().map(function (v, i) {
+  const out = readAll_(sheet_(name), cols).map(function (v, i) {
     const d = dateOnly_(v[0]);
     return { row: i + 2, key: d ? dateKey_(d) : '', v: v };
   }).filter(function (r) { return r.key; });
@@ -53,19 +51,51 @@ function readStore_(name, cols) {
   return out;
 }
 
-/** 조건에 맞는 줄을 지우고 새 줄 추가 → 날짜·다음 열 순으로 정리 (다른 데이터는 그대로) */
+/**
+ * 조건에 맞는 줄을 새 줄로 바꾸기 (다른 데이터는 그대로)
+ * - 맞는 줄이 한 덩어리로 붙어 있으면 그 자리에 덮어쓰고, 모자라면 아래에 추가·남으면 삭제 → 보통 시트 호출 1~3번
+ * - 시트 전체 정렬은 하지 않음 (읽을 때 날짜·순서로 정리하므로)
+ * - 메모리 사본도 같이 고쳐서 다시 읽지 않음
+ */
 function replaceStore_(name, cols, match, rows) {
   const sh = sheet_(name);
-  const del = readStore_(name, cols).filter(match).map(function (r) { return r.row; });
-  deleteRowList_(sh, del);
+  const all = readStore_(name, cols);
+  const hits = all.filter(match);
+  const pos = hits.map(function (r) { return r.row; });
+  const contiguous = pos.length > 0 && pos[pos.length - 1] - pos[0] === pos.length - 1;
+  if (contiguous) {
+    const start = pos[0], n = Math.min(pos.length, rows.length);
+    if (n) sh.getRange(start, 1, n, cols).setValues(rows.slice(0, n));
+    if (pos.length > rows.length) sh.deleteRows(start + rows.length, pos.length - rows.length);
+    else if (rows.length > pos.length) {
+      sh.insertRowsAfter(start + pos.length - 1, rows.length - pos.length);
+      sh.getRange(start + pos.length, 1, rows.length - pos.length, cols).setValues(rows.slice(pos.length));
+    }
+    // 메모리 사본: 그 덩어리만 바꾸고 아래 줄 번호를 밀거나 당김
+    const shift = rows.length - pos.length;
+    const before = all.filter(function (r) { return r.row < start; });
+    const after = all.filter(function (r) { return r.row > pos[pos.length - 1]; }).map(function (r) { return { row: r.row + shift, key: r.key, v: r.v }; });
+    const mid = rows.map(function (v, k) { return { row: start + k, key: dateKey_(dateOnly_(v[0])), v: v }; });
+    STORE_MEMO_[name] = before.concat(mid, after);
+    return;
+  }
+  // 그 날짜가 처음이면: 맨 아래에 추가 (기존 줄 번호는 그대로라 메모리 사본에 붙이기만)
+  if (!pos.length) {
+    if (!rows.length) return;
+    const at = Math.max(sh.getLastRow(), 1) + 1;
+    ensureSize_(sh, at + rows.length + 5, cols);
+    sh.getRange(at, 1, rows.length, cols).setValues(rows);
+    STORE_MEMO_[name] = all.concat(rows.map(function (v, k) { return { row: at + k, key: dateKey_(dateOnly_(v[0])), v: v }; }));
+    return;
+  }
+  // 흩어져 있으면: 지우고 맨 아래에 추가 (드문 경우라 메모리 사본은 다시 읽게 비움)
+  deleteRowList_(sh, pos);
   if (rows.length) {
     const at = Math.max(sh.getLastRow(), 1) + 1;
     ensureSize_(sh, at + rows.length + 5, cols);
     sh.getRange(at, 1, rows.length, cols).setValues(rows);
   }
-  const last = sh.getLastRow();
-  if (last > 2) sh.getRange(2, 1, last - 1, cols).sort([{ column: 1, ascending: true }, { column: 2, ascending: true }, { column: 3, ascending: true }]);
-  STORE_MEMO_ = {};
+  delete STORE_MEMO_[name];
 }
 
 /* ---------- 할 일 ---------- */

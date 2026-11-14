@@ -22,11 +22,11 @@ function buildArchive_(theme) {
 }
 
 /** 기록 전체 읽기 → [{row, key, cat, item, done, value, week}] */
-function readArchive_() {
-  const sh = sheet_(CONFIG.SHEETS.ARCHIVE);
-  const last = sh.getLastRow();
-  if (last < 2) return [];
-  return sh.getRange(2, 1, last - 1, 6).getValues().map(function (r, i) {
+/** readArchive_: 실행 한 번 동안 기억 */
+function readArchive_() { return memo_('archive', readArchiveRaw_); }
+
+function readArchiveRaw_() {
+  return readAll_(sheet_(CONFIG.SHEETS.ARCHIVE), 6).map(function (r, i) {
     const d = dateOnly_(r[0]);
     return { row: i + 2, key: d ? dateKey_(d) : String(r[0]), cat: r[1], item: r[2], done: r[3], value: r[4], week: String(r[5]) };
   });
@@ -37,6 +37,7 @@ function readArchive_() {
  * keys: [{date, cat}] 에 해당하는 기존 행을 지우고 rows를 추가
  */
 function replaceArchive_(keys, rows) {
+  forget_('archive');
   const sh = sheet_(CONFIG.SHEETS.ARCHIVE);
   const want = {};
   keys.forEach(function (k) { want[dateKey_(k.date) + '|' + k.cat] = true; });
@@ -66,8 +67,11 @@ function buildDayRows_(date) {
     rows.push([date, C.TODO, t.text, missed ? false : t.done, missed ? CONFIG.CARRY.VALUE : '', wk]);
   });
   const day = getDayData_(date);
-  getHabits_().forEach(function (name) {
-    if (name) rows.push([date, C.HABIT, name, !!day.habits[name], '', wk]);
+  // 지금 습관 목록 + 그날 체크된 예전 이름의 습관 (이름을 바꾸거나 지워도 지난 기록 유지)
+  const names = getHabits_().filter(String);
+  Object.keys(day.habits).forEach(function (n) { if (day.habits[n] && names.indexOf(n) < 0) names.push(n); });
+  names.forEach(function (name) {
+    rows.push([date, C.HABIT, name, !!day.habits[name], '', wk]);
   });
   if (day.mood.score || day.mood.memo) rows.push([date, C.MOOD, day.mood.memo, '', day.mood.score, wk]); // 기분: 항목=메모, 값=점수
   scheduleOf_(date, day).forEach(function (it) {
@@ -82,10 +86,46 @@ function dayKeys_(date) {
   return [C.TODO, C.HABIT, C.MOOD, C.SCHEDULE, C.CLASS].map(function (cat) { return { date: date, cat: cat }; });
 }
 
-/** 편집 즉시 그날 기록 갱신 (미래 날짜는 밤에 저장) */
+/**
+ * 편집한 날짜를 "기록할 날짜"로 표시만 함 (빠른 저장)
+ * 기록 시트에 바로 쓰면 그 시트를 참조하는 수식이 전부 다시 계산돼 느려지므로,
+ * 1시간마다·밤 23:50·새 주 시작·"지금 저장" 때 flushArchive_가 한 번에 기록. (미래 날짜는 그날 밤에)
+ */
 function archiveDayLive_(date) {
   if (!date || date > today_()) return;
-  replaceArchive_(dayKeys_(date), buildDayRows_(date));
+  markArchiveDirty_('D|' + dateKey_(date));
+}
+
+/** 꼭 끝낼 일이 바뀐 주를 "기록할 주"로 표시 */
+function markWeekGoalsDirty_(monday) {
+  const mon = mondayOf_(monday);
+  if (mon <= today_()) markArchiveDirty_('W|' + dateKey_(mon));
+}
+
+/** 기록할 항목 표시 (스크립트 속성에 모아 둠) */
+function markArchiveDirty_(key) {
+  const props = props_();
+  const set = JSON.parse(props.getProperty('ARCHIVE_DIRTY') || '[]');
+  if (set.indexOf(key) >= 0) return;
+  set.push(key);
+  props.setProperty('ARCHIVE_DIRTY', JSON.stringify(set));
+}
+
+/** 표시해 둔 날짜·주를 한 번에 기록 시트에 저장 → 저장한 행 수 */
+function flushArchive_() {
+  const props = props_();
+  const set = JSON.parse(props.getProperty('ARCHIVE_DIRTY') || '[]');
+  if (!set.length) return 0;
+  let keys = [], rows = [];
+  set.forEach(function (k) {
+    const date = dateOnly_(k.slice(2));
+    const g = k.charAt(0) === 'W' ? weekGoalRows_(date) : { keys: dayKeys_(date), rows: buildDayRows_(date) };
+    keys = keys.concat(g.keys);
+    rows = rows.concat(g.rows);
+  });
+  replaceArchive_(keys, rows);
+  props.setProperty('ARCHIVE_DIRTY', '[]');
+  return rows.length;
 }
 
 /** 그 주 꼭 끝낼 일 → 주간목표 (날짜 = 그 주 월요일) */
@@ -125,6 +165,7 @@ function archiveMonthGoals_() {
 
 /** from ~ to 하루치 저장 (오늘 이후는 건너뜀) → 저장한 행 수 */
 function saveRange_(from, to) {
+  flushArchive_(); // 표시해 둔 다른 날짜도 같이
   let keys = [], rows = [];
   const today = today_();
   for (let d = from; d <= to && d <= today; d = addDays_(d, 1)) {

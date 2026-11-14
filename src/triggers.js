@@ -48,6 +48,7 @@ function syncCalendarHourly() {
   runSafely_('캘린더 불러오기', function () {
     dailyRollover_();
     syncCalendar_();
+    flushArchive_(); // 미뤄 둔 기록 저장
   });
 }
 

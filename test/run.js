@@ -28,7 +28,8 @@ const ts = (env) => env.ss.getSheetByName('오늘');
 const W = (env) => env.run('WEEKLY');
 const T = (env) => env.run('TODAY');
 const edit = (env, sheet, r, c, nr, nc) => env.ctx.handleEdit({ range: sheet.getRange(r, c, nr || 1, nc || 1) });
-const archiveRows = (env) => env.run('readArchive_()');
+// 기록 시트는 1시간마다(·밤·새 주) 한 번에 저장되므로, 확인 전에 1시간 트리거를 돌림
+const archiveRows = (env) => { env.ctx.syncCalendarHourly(); return env.run('readArchive_()'); };
 const boot = (env) => env.ctx.webBoot();
 const dayOf = (week, key) => week.days.find((d) => d.key === key);
 const todoTexts = (day) => day.todos.map((r) => r[2]);
@@ -74,7 +75,7 @@ test('시트에서 할 일 추가·체크·메모 수정 → 저장소·웹앱·
 test('웹앱에서 할 일 추가·체크·메모 → 위클리·오늘 시트·기록에 바로 반영', () => {
   const env = envAt(2026, 11, 11);
   const res = env.ctx.webSetTodos('2026-11-11', [[false, '9-10', '운동', '스쿼트 3세트', ''], [true, '', '장보기', '우유', ''], [false, '', '독서', '', '']]);
-  same(todoTexts(dayOf(res.week, '2026-11-11')), ['운동', '독서', '장보기']);
+  same(todoTexts(res.day), ['운동', '독서', '장보기']);
   same(sheetTodos(env, 2).slice(0, 3), [[false, '09:00-10:00', '운동'], [false, '', '독서'], [true, '', '장보기']]);
   assert.strictEqual(ws(env).getRange(W(env).TODO_START, W(env).memoCol(2)).getValue(), '스쿼트 3세트');
   assert.strictEqual(ts(env).getRange(T(env).TODO_START + 2, T(env).MEMO_COL).getValue(), '우유');
@@ -94,7 +95,7 @@ test('할 일 12개 → 시트는 10줄 + "+2개 더", 웹앱은 12개 전부, �
   const env = envAt(2026, 11, 11);
   const rows = Array.from({ length: 12 }, (_, i) => [i < 3, '', '할 일 ' + (i + 1), '', '']);
   const res = env.ctx.webSetTodos('2026-11-11', rows);
-  assert.strictEqual(dayOf(res.week, '2026-11-11').todos.length, 12);
+  assert.strictEqual(res.day.todos.length, 12);
   assert.ok(sheetTodos(env, 2).every((r) => r[2]), '10줄 모두 채워짐');
   const w = W(env);
   assert.strictEqual(ws(env).getRange(w.COUNT, w.checkCol(2)).getValue(), '3 완료 · 9 남음 · +2개 더');
@@ -112,7 +113,7 @@ test('할 일 12개 → 시트는 10줄 + "+2개 더", 웹앱은 12개 전부, �
 test('꼭 끝낼 일도 개수 제한 없음 → 시트는 5줄 + "+N개 더"', () => {
   const env = envAt(2026, 11, 11);
   const res = env.ctx.webSetMust('2026-11-09', Array.from({ length: 7 }, (_, i) => [i === 0, '목표 ' + (i + 1)]));
-  assert.strictEqual(res.week.must.length, 7);
+  assert.strictEqual(res.weekPart.must.length, 7);
   const w = W(env);
   assert.strictEqual(ws(env).getRange(w.MUST_START + 4, 2).getValue(), '목표 5');
   assert.strictEqual(ws(env).getRange(w.MUST_PROGRESS, w.MUST_WIDTH - 1).getValue(), '14% · +2개 더');
@@ -139,13 +140,13 @@ test('습관·기분: 시트 ↔ 웹앱', () => {
 test('거의 동시에 고치면 나중 저장으로 맞추고 conflict 표시', () => {
   const env = envAt(2026, 11, 11);
   const res1 = env.ctx.webSetTodos('2026-11-11', [[false, '', '웹 할 일', '', '']]);
-  const rev = dayOf(res1.week, '2026-11-11').rev;
+  const rev = res1.day.rev;
   ws(env).getRange(W(env).TODO_START + 1, W(env).textCol(2)).setValue('시트 할 일'); // 그사이 시트에서 추가
   edit(env, ws(env), W(env).TODO_START + 1, W(env).textCol(2));
   const res2 = env.ctx.webSetTodos('2026-11-11', [[true, '', '웹 할 일', '', '']], rev);
   assert.strictEqual(res2.conflict, true);
-  same(todoTexts(dayOf(res2.week, '2026-11-11')), ['웹 할 일'], '나중에 저장한 웹앱 내용으로');
-  const res3 = env.ctx.webSetTodos('2026-11-11', [[false, '', '웹 할 일', '', '']], dayOf(res2.week, '2026-11-11').rev);
+  same(todoTexts(res2.day), ['웹 할 일'], '나중에 저장한 웹앱 내용으로');
+  const res3 = env.ctx.webSetTodos('2026-11-11', [[false, '', '웹 할 일', '', '']], res2.day.rev);
   assert.strictEqual(res3.conflict, false);
 });
 test('서버 캐시: 시트 편집(onEdit) 뒤에는 새로 읽음', () => {
@@ -163,8 +164,8 @@ test('3주 전·3주 뒤로 이동해 할 일 추가·체크, 습관·기분·�
   let wk = env.ctx.webGetWeek('2026-10-19'); // 3주 전 월요일
   assert.strictEqual(wk.monday, '2026-10-19');
   let res = env.ctx.webSetTodos('2026-10-21', [[false, '', '3주 전 할 일', '메모', '']]);
-  res = env.ctx.webSetTodos('2026-10-21', [[true, '', '3주 전 할 일', '메모', '']], dayOf(res.week, '2026-10-21').rev);
-  same(dayOf(res.week, '2026-10-21').todos, [[true, '', '3주 전 할 일', '메모', '']]);
+  res = env.ctx.webSetTodos('2026-10-21', [[true, '', '3주 전 할 일', '메모', '']], res.day.rev);
+  same(res.day.todos, [[true, '', '3주 전 할 일', '메모', '']]);
   env.ctx.webSetHabit('2026-10-21', '물 8잔 마시기', true);
   env.ctx.webSetMood('2026-10-21', 5, '');
   env.ctx.webSetMust('2026-10-19', [[true, '지난 목표']]);
@@ -235,7 +236,7 @@ test('시간 범위 "11-13"·"11~13"·"1100-1300" 변환 + 시작 시간순, 메
     [false, '', '점심 약속 11~13', '2층', ''], [false, '', '1400-1530 회의', '', ''], [false, '', '9-10 운동', '하체', ''],
     [false, '15:00', '전화', '', ''], [false, '', '3-4쪽 읽기', '', ''],
   ]);
-  same(dayOf(res.week, '2026-11-11').todos, [
+  same(res.day.todos, [
     [false, '09:00-10:00', '운동', '하체', ''], [false, '11:00-13:00', '점심 약속', '2층', ''], [false, '14:00-15:30', '회의', '', ''],
     [false, '15:00', '전화', '', ''], [false, '', '3-4쪽 읽기', '', ''],
   ]);
@@ -253,7 +254,7 @@ test('새 일정 → 구글 캘린더 1개 + 연동 메모 1줄, 시트·웹앱 
   const rows = env.run('readEvents_()');
   assert.strictEqual(rows.filter((r) => r[1] === '캘린더').length, 1);
   assert.strictEqual(rows.filter((r) => r[1] === '메모').length, 1);
-  same(sched(res.week, '2026-11-11').map((x) => x.text), ['13:42 할머니집 기차'], '웹앱 한 번');
+  same(res.day.schedule.map((x) => x.text), ['13:42 할머니집 기차'], '웹앱 한 번');
   same(res.month.dates[10].items.map((x) => x.text), ['13:42 할머니집 기차'], '먼슬리 한 번');
   const M = env.run('MONTHLY'), ms = env.ss.getSheetByName('먼슬리');
   assert.strictEqual(ms.getRange(M.memoRow(2), M.dayCol(2)).getValue(), '', '먼슬리 시트 메모 칸에 또 쓰지 않음 (캘린더 줄에만)');
@@ -290,7 +291,7 @@ test('일정 완료 체크: 체크된 일정은 아래로, 캘린더 일정은 �
   let items = sched(boot(env).week, '2026-11-11');
   same(items.map((x) => [x.kind, x.text, x.done]), [['tt', '09:00-10:30 통계학', false], ['cal', '14:00-15:00 치과', false]]);
   let res = env.ctx.webCheckItem('2026-11-11', items[0].key, true);
-  items = sched(res.week, '2026-11-11');
+  items = res.day.schedule;
   same(items.map((x) => [x.text, x.done]), [['14:00-15:00 치과', false], ['09:00-10:30 통계학', true]], '체크된 수업은 아래로');
   res = env.ctx.webCheckItem('2026-11-11', items[0].key, true);
   assert.strictEqual(env.events[0].title, '치과', '구글 캘린더 일정은 안 바뀜');
@@ -304,12 +305,12 @@ test('캘린더 일정 수정·삭제: ID로 찾아 반영 + 연동 메모도, �
   let res = env.ctx.webSaveItem('2026-11-13', NEW, { title: '발표', start: '14:00', end: '', memo: '자료 챙기기' }, 2026, 11, 'x');
   const ev = env.events[0];
   assert.strictEqual(ev.description, '자료 챙기기');
-  res = env.ctx.webSaveItem('2026-11-13', itemRef(sched(res.week, '2026-11-13'), '14:00 발표'), { title: '발표 리허설', start: '15:00', end: '16:00', memo: '' }, 2026, 11);
+  res = env.ctx.webSaveItem('2026-11-13', itemRef(res.day.schedule, '14:00 발표'), { title: '발표 리허설', start: '15:00', end: '16:00', memo: '' }, 2026, 11);
   assert.ok(res.ok, res.message);
   assert.strictEqual(env.events.length, 1);
   assert.strictEqual(ev.title, '발표 리허설');
   assert.strictEqual(env.run('readEvents_()').find((r) => r[1] === '메모')[2], '15:00-16:00 발표 리허설');
-  res = env.ctx.webDeleteItem('2026-11-13', itemRef(sched(res.week, '2026-11-13'), '15:00-16:00 발표 리허설'), 2026, 11);
+  res = env.ctx.webDeleteItem('2026-11-13', itemRef(res.day.schedule, '15:00-16:00 발표 리허설'), 2026, 11);
   assert.ok(res.ok, res.message);
   assert.strictEqual(env.events.length, 0);
   assert.strictEqual(env.run('readEvents_()').filter((r) => r[1] === '메모').length, 0);

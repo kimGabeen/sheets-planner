@@ -307,4 +307,14 @@
 
   /* 중복 안내 */
   .dup-card { display: flex; align-items: center; justify-content: space-between; gap: 8px; background: #FFF4E5; font-size: 14px; }
+
+  /* 저장 중인 일정 (화면에 먼저 보여 줌) */
+  .sched li.pending { color: var(--sub); font-style: italic; padding-left: 34px; }
+
+  /* 속도 기록 */
+  .perf { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .perf th { text-align: left; color: var(--sub); font-weight: 600; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  .perf td { padding: 8px 4px; border-bottom: 1px solid var(--line); }
+  .perf td:nth-child(n+2), .perf th:nth-child(n+2) { text-align: right; white-space: nowrap; }
+  .perf-link { text-align: center; margin: 8px 0 0; }
 </style>

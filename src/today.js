@@ -122,7 +122,10 @@ function buildToday_(theme) {
 }
 
 /** 오늘 시트에 적힌 날짜 */
-function todaySheetDate_() {
+/** todaySheetDate_: 실행 한 번 동안 기억 */
+function todaySheetDate_() { return memo_('todayDate', todaySheetDateRaw_); }
+
+function todaySheetDateRaw_() {
   return dateOnly_(sheet_(CONFIG.SHEETS.TODAY).getRange(TODAY.DATE_ROW, 1).getValue());
 }
 
@@ -131,6 +134,7 @@ function todaySheetDate_() {
 /** 오늘 시트를 오늘 날짜로 바꾸고 위클리 값으로 다시 채우기 */
 function refreshToday_() {
   sheet_(CONFIG.SHEETS.TODAY).getRange(TODAY.DATE_ROW, 1).setValue(today_());
+  forget_('todayDate');
   renderTodayView_();
 }
 
@@ -138,30 +142,36 @@ function refreshToday_() {
  * 저장소 → 오늘 시트 (적힌 날짜 기준)
  * 할 일 10줄·꼭 끝낼 일 5줄까지 보이고 넘치면 "+N개 더", 개수·완료율은 전체 기준
  */
-function renderTodayView_() {
+function renderTodayView_(parts) {
   const T = TODAY, sh = sheet_(CONFIG.SHEETS.TODAY), n = CONFIG.TODO_ROWS, m = CONFIG.MUST_COUNT;
   const date = todaySheetDate_();
   if (!date) return;
-  const list = getTodos_(date), day = getDayData_(date), week = getWeekData_(mondayOf_(date));
-  const rows = [], memos = [];
-  for (let i = 0; i < n; i++) {
-    const t = list[i];
-    rows.push(t ? [t.done, todoTime_(t), todoDisplay_(t)] : [false, '', '']);
-    memos.push([t ? t.memo : '']);
+  const P = parts || { todos: true, habits: true, must: true, mood: true };
+  if (P.todos) {
+    // 할 일 10줄 + "+N개 더" 줄을 한 번에, 메모·머리글
+    const list = getTodos_(date), rows = [], memos = [];
+    for (let i = 0; i < n; i++) {
+      const t = list[i];
+      rows.push(t ? [t.done, todoTime_(t), todoDisplay_(t)] : [false, '', '']);
+      memos.push([t ? t.memo : '']);
+    }
+    rows.push([list.length > n ? '+' + (list.length - n) + '개 더 (웹앱에서 전부 보기)' : '', '', '']);
+    sh.getRange(T.TODO_START, 1, n + 1, 3).setValues(rows);
+    memoRange_(sh, T.TODO_START, T.MEMO_COL).setValues(memos);
+    const done = list.filter(function (t) { return t.done; }).length;
+    sh.getRange(T.TODO_HEADER, 1).setValue('오늘 할 일   ' + done + ' / ' + list.length);
   }
-  sh.getRange(T.TODO_START, 1, n, 3).setValues(rows);
-  memoRange_(sh, T.TODO_START, T.MEMO_COL).setValues(memos);
-  const done = list.filter(function (t) { return t.done; }).length;
-  sh.getRange(T.TODO_HEADER, 1).setValue('오늘 할 일   ' + done + ' / ' + list.length);
-  sh.getRange(T.TODO_MORE, 1).setValue(list.length > n ? '+' + (list.length - n) + '개 더 (웹앱에서 전부 보기)' : '');
-  sh.getRange(T.HABIT_START, 1, CONFIG.HABIT_COUNT, 1)
-    .setValues(getHabits_().map(function (h) { return [!!(h && day.habits[h])]; }));
-  const must = [];
-  for (let i = 0; i < m; i++) must.push(week.must[i] ? [week.must[i].done, week.must[i].text] : [false, '']);
-  sh.getRange(T.MUST_START, 1, m, 2).setValues(must);
-  sh.getRange(T.MUST_HEADER, 1).setValue('이번 주 꼭 끝낼 일' + (week.must.length > m ? '   +' + (week.must.length - m) + '개 더' : ''));
-  sh.getRange(T.MOOD, 2).setValue(day.mood.score ? CONFIG.MOODS[day.mood.score - 1] : '');
-  sh.getRange(T.MOOD_MEMO, 2).setValue(day.mood.memo);
+  if (P.habits || P.mood) {
+    const day = getDayData_(date);
+    if (P.habits) sh.getRange(T.HABIT_START, 1, CONFIG.HABIT_COUNT, 1).setValues(getHabits_().map(function (h) { return [!!(h && day.habits[h])]; }));
+    if (P.mood) sh.getRange(T.MOOD, 2, 2, 1).setValues([[day.mood.score ? CONFIG.MOODS[day.mood.score - 1] : ''], [day.mood.memo]]);
+  }
+  if (P.must) {
+    const week = getWeekData_(mondayOf_(date)), must = [];
+    for (let i = 0; i < m; i++) must.push(week.must[i] ? [week.must[i].done, week.must[i].text] : [false, '']);
+    sh.getRange(T.MUST_START, 1, m, 2).setValues(must);
+    sh.getRange(T.MUST_HEADER, 1).setValue('이번 주 꼭 끝낼 일' + (week.must.length > m ? '   +' + (week.must.length - m) + '개 더' : ''));
+  }
 }
 
 
@@ -192,30 +202,31 @@ function onTodayEdit_(e) {
   // 오늘 시트에 적힌 날짜의 저장소로 반영 → 위클리 시트도 다시 그림
   const date = todaySheetDate_();
   if (!date) return;
-  let changed = false;
+  const parts = {};
   if (hit_(e.range, T.TODO_START, 1, CONFIG.TODO_ROWS, T.MEMO_COL)) {
     syncTodosFromSheet_(sh, T.TODO_START, 1, T.MEMO_COL, date);
-    changed = true;
+    parts.todos = true;
   }
   if (hit_(e.range, T.HABIT_START, 1, CONFIG.HABIT_COUNT, 1)) {
     const checks = sh.getRange(T.HABIT_START, 1, CONFIG.HABIT_COUNT, 1).getValues();
     const map = {};
     getHabits_().forEach(function (n, i) { if (n) map[n] = checks[i][0] === true; });
     setHabitsDone_(date, map);
-    changed = true;
+    parts.habits = true;
   }
   if (hit_(e.range, T.MOOD, 2, 2, 2)) {
     setMoodData_(date, moodScore_(sh.getRange(T.MOOD, 2).getValue()), sh.getRange(T.MOOD_MEMO, 2).getValue());
-    changed = true;
+    parts.mood = true;
   }
   if (hit_(e.range, T.MUST_START, 1, CONFIG.MUST_COUNT, 3)) {
     syncMustFromSheet_(sh, mondayOf_(date), T.MUST_START, 1, 2);
-    archiveWeekGoals_(mondayOf_(date));
-    changed = true;
+    markWeekGoalsDirty_(mondayOf_(date));
+    parts.must = true;
   }
-  if (!changed) return;
+  if (!Object.keys(parts).length) return;
   archiveDayLive_(date);
-  renderTodayView_();
+  // 오늘 시트는 할 일만 다시 정렬해 그리고(습관·기분·꼭 끝낼 일은 이미 사용자가 쓴 그대로), 위클리는 바뀐 부분만
+  if (parts.todos || parts.must) renderTodayView_({ todos: parts.todos, must: parts.must });
   const d = weeklyIndexOf_(date);
-  if (d >= 0) renderWeekView_({ days: [d], habits: true, must: true });
+  if (d >= 0) renderWeekView_({ days: [d], todos: !!parts.todos, mood: !!parts.mood, habits: !!parts.habits, must: !!parts.must });
 }

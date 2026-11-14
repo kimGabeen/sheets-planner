@@ -218,11 +218,15 @@ function buildMonthlyCharts_(sh, theme) {
 /* ---------- 데이터 ---------- */
 
 /** 먼슬리에서 고른 연·월 ({y, m}, 없으면 null) */
-function getMonthlyYM_() {
+/** getMonthlyYM_: 실행 한 번 동안 기억 */
+function getMonthlyYM_() { return memo_('monthlyYM', getMonthlyYMRaw_); }
+
+function getMonthlyYMRaw_() {
   const sh = sheet_(CONFIG.SHEETS.MONTHLY);
   if (!sh) return null;
-  const y = Number(sh.getRange(MONTHLY.YEAR.row, MONTHLY.YEAR.col).getValue());
-  const m = Number(sh.getRange(MONTHLY.MONTH.row, MONTHLY.MONTH.col).getValue());
+  // 연도(C1)·월(G1)을 한 번에 읽기
+  const v = sh.getRange(MONTHLY.YEAR.row, MONTHLY.YEAR.col, 1, MONTHLY.MONTH.col - MONTHLY.YEAR.col + 1).getValues()[0];
+  const y = Number(v[0]), m = Number(v[MONTHLY.MONTH.col - MONTHLY.YEAR.col]);
   return y && m >= 1 && m <= 12 ? { y: y, m: m } : null;
 }
 

@@ -6,6 +6,7 @@
 
 /** 처음 설정 (Apps Script 편집기 또는 메뉴에서 실행) */
 function setup() {
+  resetRunMemo_();
   const ss = ss_();
   ss.setSpreadsheetLocale(CONFIG.LOCALE);
   ss.setSpreadsheetTimeZone(CONFIG.TIMEZONE);
@@ -69,12 +70,13 @@ function buildAllLayouts_(theme) {
 function initDefaults_() {
   const now = today_();
   const w = sheet_(CONFIG.SHEETS.WEEKLY).getRange(WEEKLY.WEEK_START.row, WEEKLY.WEEK_START.col);
-  if (!w.getValue()) w.setValue(mondayOf_(now));
+  if (!w.getValue()) { w.setValue(mondayOf_(now)); forget_('weeklyMonday'); }
   const m = sheet_(CONFIG.SHEETS.MONTHLY);
   const y = m.getRange(MONTHLY.YEAR.row, MONTHLY.YEAR.col);
   const mo = m.getRange(MONTHLY.MONTH.row, MONTHLY.MONTH.col);
   if (!y.getValue()) y.setValue(String(now.getFullYear()));
   if (!mo.getValue()) mo.setValue(String(now.getMonth() + 1));
+  forget_('monthlyYM');
 }
 
 /** 시트 순서 정리 + 처음 생긴 빈 기본 시트 삭제 */

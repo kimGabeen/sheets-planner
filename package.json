@@ -5,6 +5,7 @@
   "scripts": {
     "test": "TZ=Asia/Seoul node test/run.js",
     "push": "clasp push --force",
-    "deploy": "clasp push --force && clasp update-deployment $(cat .deployment-id) --description \"$(date '+%Y-%m-%d %H:%M')\""
+    "deploy": "clasp push --force && clasp update-deployment $(cat .deployment-id) --description \"$(date '+%Y-%m-%d %H:%M')\"",
+    "bench": "TZ=Asia/Seoul node test/bench.js"
   }
 }

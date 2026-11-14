@@ -141,6 +141,7 @@ function setTimetable_(tt) {
 function setHabits_(list) {
   if (list.length > CONFIG.HABIT_COUNT) throw new Error('습관은 최대 ' + CONFIG.HABIT_COUNT + '개예요');
   const set = sheet_(CONFIG.SHEETS.SETTINGS), n = CONFIG.HABIT_COUNT;
+  flushArchive_(); // 미뤄 둔 기록은 바꾸기 전 이름으로 먼저 저장
   const before = getHabits_();
   const names = [];
   for (let i = 0; i < n; i++) names.push([list[i] ? String(list[i].name).trim() : '']);
@@ -150,9 +151,13 @@ function setHabits_(list) {
     if (old && old !== h.name) renameHabitFrom_(mon, old, h.name);
   });
   set.getRange(SETTINGS.HABIT_START, 2, n, 1).setValues(names);
+  forget_('habits');
 }
 /** 타임라인 카테고리 목록 [{name, color}] (이름 없는 줄은 제외) */
-function getCategories_() {
+/** getCategories_: 실행 한 번 동안 기억 */
+function getCategories_() { return memo_('categories', getCategoriesRaw_); }
+
+function getCategoriesRaw_() {
   const sh = sheet_(CONFIG.SHEETS.SETTINGS);
   return sh.getRange(SETTINGS.CAT_START, 2, CONFIG.TIMELINE.CATEGORY_COUNT, 2).getValues()
     .map(function (r) {
@@ -163,14 +168,20 @@ function getCategories_() {
 }
 
 /** 테마색 읽기 (형식이 틀리면 기본색) */
-function getTheme_() {
+/** getTheme_: 실행 한 번 동안 기억 */
+function getTheme_() { return memo_('theme', getThemeRaw_); }
+
+function getThemeRaw_() {
   const sh = sheet_(CONFIG.SHEETS.SETTINGS);
   const v = sh ? String(sh.getRange(SETTINGS.THEME.row, SETTINGS.THEME.col).getValue()).trim() : '';
   return /^#[0-9a-fA-F]{6}$/.test(v) ? v.toUpperCase() : CONFIG.DEFAULT_THEME;
 }
 
 /** 습관 이름 목록 (빈 칸은 '') */
-function getHabits_() {
+/** getHabits_: 실행 한 번 동안 기억 */
+function getHabits_() { return memo_('habits', getHabitsRaw_); }
+
+function getHabitsRaw_() {
   const sh = sheet_(CONFIG.SHEETS.SETTINGS);
   return sh.getRange(SETTINGS.HABIT_START, 2, CONFIG.HABIT_COUNT, 1).getValues()
     .map(function (r) { return String(r[0]).trim(); });

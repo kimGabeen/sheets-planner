@@ -23,6 +23,7 @@ const S = {
   dayKey: null, // 오늘 탭에서 보는 날짜 (‹ ›로 이동)
   weekKey: null, // 위클리 탭에서 보는 주 (월요일)
   lastLocal: 0, // 이 기기에서 마지막으로 저장한 때 (다른 곳 변경 안내용)
+  prefetching: {}, // 미리 받는 중인 주
   detail: null, // 위클리에서 연 요일 상세 (날짜 키)
   edit: null, // 편집 중인 할 일 {key, i}
   weekGrid: readPref('weekGrid', '') === '1', // 위클리 7칸 한 줄 보기
@@ -115,8 +116,54 @@ function dayLabel(key) {
 
 /* ---------- 서버 호출 ---------- */
 function call(fn, ...args) {
+  const t0 = performance.now();
   return new Promise((resolve, reject) => {
-    google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[fn](...args);
+    google.script.run.withSuccessHandler((r) => { logPerf(fn, t0, r); resolve(r); })
+      .withFailureHandler((e) => { logPerf(fn, t0, null); reject(e); })[fn](...args);
+  });
+}
+
+/* ---------- 속도 기록 (실제 처리 시간) ---------- */
+const PERF_NAMES = { webBoot: '앱 열기', webRefresh: '새로고침(캘린더)', webSetTodos: '할 일 저장·체크', webCheckItem: '일정 체크',
+  webSaveItem: '일정 저장', webDeleteItem: '일정 삭제', webGetWeek: '날짜 이동(주 불러오기)', webSetHabit: '습관 체크', webSetMood: '기분 저장',
+  webSetMust: '꼭 끝낼 일', webSetWeekInfo: '주간 목표', webGetMonth: '먼슬리 열기', webGetTimeline: '타임라인 열기', webSetTimeline: '타임라인 저장' };
+
+/** 호출마다 전체 시간(네트워크 포함)과 서버 처리 시간을 기기에 남김 (최근 100개) */
+function logPerf(fn, t0, res) {
+  try {
+    const list = JSON.parse(localStorage.getItem('planner.v2.perf') || '[]');
+    list.push({ fn: fn, total: Math.round(performance.now() - t0), server: res && typeof res === 'object' && res._ms ? res._ms : null, at: Date.now() });
+    localStorage.setItem('planner.v2.perf', JSON.stringify(list.slice(-100)));
+  } catch (e) { /* 기록 실패는 무시 */ }
+}
+
+/** 속도 기록 표: 작업별 횟수·평균 (서버 처리 / 전체) + 시트 편집·트리거(서버 기록) */
+function openPerf() {
+  let list = [];
+  try { list = JSON.parse(localStorage.getItem('planner.v2.perf') || '[]'); } catch (e) { list = []; }
+  const groups = {};
+  list.forEach((p) => { (groups[p.fn] = groups[p.fn] || []).push(p); });
+  const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null);
+  const ms = (v) => (v === null ? '–' : v >= 1000 ? (v / 1000).toFixed(1) + '초' : v + 'ms');
+  const rows = Object.keys(groups).map((fn) => {
+    const g = groups[fn];
+    return '<tr><td>' + esc(PERF_NAMES[fn] || fn) + '</td><td>' + g.length + '</td><td>' + ms(avg(g.map((x) => x.server).filter((x) => x !== null))) +
+      '</td><td>' + ms(avg(g.map((x) => x.total))) + '</td></tr>';
+  }).join('');
+  openSheet('<h2>속도 기록 <button type="button" class="close" data-x>닫기</button></h2>' +
+    '<p class="result">이 기기에서 최근 ' + list.length + '번 부른 기록이에요. 서버 = 구글 서버 처리 시간, 전체 = 누른 뒤 응답까지(네트워크 포함).</p>' +
+    '<table class="perf"><tr><th>작업</th><th>횟수</th><th>서버</th><th>전체</th></tr>' + (rows || '<tr><td colspan="4">아직 기록이 없어요</td></tr>') + '</table>' +
+    '<h3 style="margin-top:16px">시트 편집·자동 실행 (서버 기록)</h3><div id="perf-server" class="result">불러오는 중…</div>', (el) => {
+    $('[data-x]', el).addEventListener('click', closeSheet);
+    call('webGetPerf').then((sv) => {
+      const g2 = {};
+      (sv || []).forEach((p) => { (g2[p.name] = g2[p.name] || []).push(p.ms); });
+      const box = $('#perf-server', el);
+      if (!box) return;
+      box.innerHTML = Object.keys(g2).length ? '<table class="perf"><tr><th>작업</th><th>횟수</th><th>평균</th></tr>' +
+        Object.keys(g2).map((n) => '<tr><td>' + esc(PERF_NAMES[n] || ({ handleEdit: '시트 편집', syncCalendarHourly: '1시간 동기화', nightlyArchive: '밤 저장', midnightJob: '자정 작업' })[n] || n) +
+          '</td><td>' + g2[n].length + '</td><td>' + ms(avg(g2[n])) + '</td></tr>').join('') + '</table>' : '아직 기록이 없어요';
+    }).catch(() => { const box = $('#perf-server', el); if (box) box.textContent = '불러오지 못했어요'; });
   });
 }
 
@@ -187,6 +234,39 @@ function applyWeek(week) {
   store('weeks', keep);
 }
 
+/** 바뀐 하루만 받아 그 주에 끼워 넣기 */
+function applyDay(day) {
+  if (!day || !day.key) return;
+  const w = S.weeks[mondayKey(day.key)];
+  if (!w) return;
+  const i = w.days.findIndex((d) => d.key === day.key);
+  if (i >= 0) w.days[i] = day;
+  applyWeek(w);
+}
+
+/** 꼭 끝낼 일·목표만 바뀐 경우 */
+function applyWeekPart(part) {
+  const w = part && S.weeks[part.monday];
+  if (!w) return;
+  if (part.must) w.must = part.must;
+  if (part.info) w.info = part.info;
+  applyWeek(w);
+}
+
+/** 앞뒤 주를 미리 받아 둠 (날짜 이동이 바로 되게) */
+function prefetchAround(monKey) {
+  if (!monKey) return;
+  const base = parseKey(monKey);
+  [-7, 7].forEach((n) => {
+    const k = keyOf(addDays(base, n));
+    if (S.weeks[k] || S.prefetching[k]) return;
+    S.prefetching[k] = true;
+    setTimeout(() => {
+      call('webGetWeek', k).then((w) => { if (!S.weeks[k]) applyWeek(w); }).catch(() => {}).finally(() => { delete S.prefetching[k]; });
+    }, 600);
+  });
+}
+
 /** 그 주를 아직 안 받았으면 받아 오기 */
 function ensureWeek(monKey) {
   if (S.weeks[monKey] || S.loadingWeek === monKey) return;
@@ -244,11 +324,11 @@ function scheduleHtml(items, limit, clickable, dayKey) {
   const list = limit && items.length > limit ? items.slice(0, limit - 1) : items;
   return '<ul class="sched' + (clickable ? ' tap' : '') + '">' + list.map((s, i) => {
     const label = (s.kind === 'tt' ? '📚 ' : '') + esc(s.text) + noteIcon(s.memo);
-    const check = clickable ? '<button type="button" class="check s-check' + (s.done ? ' on' : '') + '" data-n="' + i + '" aria-label="일정 완료"></button>' : '';
-    const body = clickable && s.kind !== 'tt'
+    const check = clickable && !s.pending ? '<button type="button" class="check s-check' + (s.done ? ' on' : '') + '" data-n="' + i + '" aria-label="일정 완료"></button>' : '';
+    const body = clickable && s.kind !== 'tt' && !s.pending
       ? '<button type="button" class="sched-item" data-n="' + i + '">' + label + '</button>'
       : '<span class="sched-ro">' + label + '</span>';
-    return '<li class="' + (s.done ? 'done ' : '') + (s.kind === 'tt' ? 'tt' : '') + '">' + check + body + '</li>';
+    return '<li class="' + (s.done ? 'done ' : '') + (s.kind === 'tt' ? 'tt ' : '') + (s.pending ? 'pending' : '') + '">' + check + body + '</li>';
   }).join('') + (list.length < items.length ? '<li class="memo">+' + (items.length - list.length) + '개 더</li>' : '') + '</ul>';
 }
 
@@ -354,7 +434,7 @@ function commitTodos(day) {
   render();
   save('webSetTodos', day.key, day.todos, day.rev).then((res) => {
     if (!res) return;
-    applyWeek(res.week);
+    applyDay(res.day);
     if (res.conflict) notice('다른 곳에서 바뀌어서 새로 불러왔어요');
     if (!isEditing()) render();
   });
@@ -391,7 +471,7 @@ function bindDayView(day) {
     const i = +el.dataset.i;
     day.habits[i] = !day.habits[i];
     render();
-    save('webSetHabit', day.key, S.boot.habits[i], day.habits[i]).then((res) => { if (res) applyWeek(res.week); });
+    save('webSetHabit', day.key, S.boot.habits[i], day.habits[i]).then((res) => { if (res) applyDay(res.day); });
   }));
   $('#habit-edit').addEventListener('click', openHabitEditor);
   $$('.mood').forEach((el) => el.addEventListener('click', () => {
@@ -413,7 +493,7 @@ function bindDayView(day) {
     it.done = !it.done;
     day.schedule = day.schedule.filter((x) => !x.done).concat(day.schedule.filter((x) => x.done));
     render();
-    save('webCheckItem', day.key, it.key, it.done).then((res) => { if (res) { applyWeek(res.week); if (!isEditing()) render(); } });
+    save('webCheckItem', day.key, it.key, it.done).then((res) => { if (res) { applyDay(res.day); if (!isEditing()) render(); } });
   }));
 }
 
@@ -422,8 +502,11 @@ function renderToday() {
   const day = dayOf(key);
   const nav = dayNavHtml(key);
   if (!day) { $('#view').innerHTML = nav + '<p class="empty">불러오는 중…</p>'; bindDayNav(); ensureWeek(mondayKey(key)); return; }
-  $('#view').innerHTML = nav + dupNoticeHtml() + dayViewHtml(day, key === S.boot.todayKey);
+  $('#view').innerHTML = nav + dupNoticeHtml() + dayViewHtml(day, key === S.boot.todayKey) +
+    '<p class="perf-link"><button type="button" class="link-btn" id="perf-open">⚡ 속도 기록</button></p>';
   bindDayNav();
+  $('#perf-open').addEventListener('click', openPerf);
+  prefetchAround(mondayKey(key));
   bindDupNotice();
   bindDayView(day);
 }
@@ -544,7 +627,8 @@ function renderWeek() {
   $('#tt-edit').addEventListener('click', openTimetableEditor);
   $('#habit-edit').addEventListener('click', openHabitEditor);
   bindWeekNav();
-  const saveWeek = (fn, arg) => save(fn, w.monday, arg).then((res) => { if (res) { applyWeek(res.week); if (!isEditing()) render(); } });
+  prefetchAround(S.weekKey);
+  const saveWeek = (fn, arg) => save(fn, w.monday, arg).then((res) => { if (res) { applyWeekPart(res.weekPart); if (!isEditing()) render(); } });
   $$('.info').forEach((el) => el.addEventListener('change', () => {
     w.info[+el.dataset.i] = el.value.trim();
     saveWeek('webSetWeekInfo', w.info);
@@ -575,7 +659,7 @@ function renderWeek() {
     const day = w.days[+el.dataset.d], i = +el.dataset.h;
     day.habits[i] = !day.habits[i];
     render();
-    save('webSetHabit', day.key, S.boot.habits[i], day.habits[i]).then((res) => { if (res) applyWeek(res.week); });
+    save('webSetHabit', day.key, S.boot.habits[i], day.habits[i]).then((res) => { if (res) applyDay(res.day); });
   }));
   // 가로 스크롤이면 오늘 카드가 보이게
   const today = $('.day.today'), days = $('#days');
@@ -846,7 +930,7 @@ function openItemSheet(key, items, edit, ym, message) {
     const msg = (t, bad) => { const m = $('#item-msg', el); m.textContent = t; m.classList.toggle('bad', !!bad); };
     // 결과 반영: 위클리·먼슬리 데이터 바로 바꾸고 다시 그림
     const apply = (res) => {
-      if (res.week) applyWeek(res.week);
+      if (res.day) applyDay(res.day);
       if (res.month) { S.month = res.month; store('month.' + res.month.y + '-' + res.month.m, res.month); }
       else if (S.month) loadMonth(); // 먼슬리 밖에서 바꿨으면 달력도 새로
       render();
@@ -868,22 +952,58 @@ function openItemSheet(key, items, edit, ym, message) {
         '<button type="button" class="btn-ghost" id="del-no">취소</button><button type="button" class="btn btn-del" id="del-yes">지우기</button>';
       $('#del-no', el).addEventListener('click', () => openItemSheet(key, items, edit, ym));
       $('#del-yes', el).addEventListener('click', () => {
-        busy('삭제 중…');
-        call('webDeleteItem', key, edit.ref, ym ? ym.y : null, ym ? ym.m : null).then(apply).catch(fail);
+        // 화면에서 먼저 지우고 창을 닫은 뒤, 저장은 뒤에서
+        closeSheet();
+        if (ym) S.selDay = null;
+        localItems(key, (list) => list.filter((it) => !(it.ref && edit.ref && it.ref.kind === edit.ref.kind && it.ref.index === edit.ref.index)));
+        render();
+        save('webDeleteItem', key, edit.ref, ym ? ym.y : null, ym ? ym.m : null).then((res) => applyBg(res, key, ym));
       });
     });
     const requestId = newId(); // 이 입력창에서 한 번 = 한 요청 (연타·재시도해도 한 번만 저장)
     $('#item-form', el).addEventListener('submit', (e) => {
       e.preventDefault();
       if (el.dataset.saving) return; // 저장 중에는 잠금
-      el.dataset.saving = '1';
       const f = new FormData(e.target);
-      busy('저장 중…');
-      S.lastLocal = Date.now();
-      call('webSaveItem', key, edit ? edit.ref : null, { title: f.get('title'), start: f.get('start'), end: f.get('end'), memo: f.get('memo') },
-        ym ? ym.y : null, ym ? ym.m : null, requestId).then(apply).catch((err) => { delete el.dataset.saving; fail(err); });
+      const item = { title: String(f.get('title') || '').trim(), start: normTime(f.get('start')), end: normTime(f.get('end')), memo: f.get('memo') };
+      // 입력 확인은 화면에서 바로 (서버를 기다리지 않음)
+      if (!item.title) return msg('제목을 입력해 주세요', true);
+      if (item.end && !item.start) return msg('시작시간 확인', true);
+      if (item.start && item.end && item.end <= item.start) return msg('끝시간 확인', true);
+      el.dataset.saving = '1';
+      // 화면에 먼저 반영하고 창을 닫음 → 구글 캘린더 저장은 뒤에서
+      const text = (item.start ? item.start + (item.end ? '-' + item.end : '') + ' ' : '') + item.title;
+      const temp = { kind: edit ? edit.kind : 'cal', text: text, title: item.title, start: item.start, end: item.end, memo: item.memo, done: false, pending: true, ref: edit ? edit.ref : null };
+      localItems(key, (list) => {
+        if (!edit) return list.concat([temp]);
+        return list.map((it) => (it.ref && edit.ref && it.ref.kind === edit.ref.kind && it.ref.index === edit.ref.index ? temp : it));
+      });
+      closeSheet();
+      if (ym) S.selDay = null;
+      render();
+      save('webSaveItem', key, edit ? edit.ref : null, item, ym ? ym.y : null, ym ? ym.m : null, requestId).then((res) => applyBg(res, key, ym));
     });
   });
+}
+
+/** 그날 일정 목록을 화면 데이터에서 바로 고치기 (하루 화면 + 먼슬리 칸) */
+function localItems(key, change) {
+  const day = dayOf(key);
+  if (day) day.schedule = change(day.schedule);
+  if (S.month && key.slice(0, 7) === S.month.y + '-' + pad(S.month.m)) {
+    const c = S.month.dates[parseKey(key).getDate() - 1];
+    if (c) c.items = change(c.items);
+  }
+}
+
+/** 뒤에서 끝난 일정 저장·삭제 결과 반영 (실패하면 짧게 안내하고 서버 값으로) */
+function applyBg(res, key, ym) {
+  if (!res) return; // 네트워크 오류는 save()가 안내 + 다시 불러옴
+  if (res.day) applyDay(res.day);
+  if (res.month) { S.month = res.month; store('month.' + res.month.y + '-' + res.month.m, res.month); }
+  else if (S.month) loadMonth();
+  if (!res.ok) notice(res.message, true);
+  if (!isEditing()) render();
 }
 
 function monthNavHtml() {
