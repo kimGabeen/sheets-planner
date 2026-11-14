@@ -65,6 +65,16 @@ function eventSortKey_(text) {
   return m ? +m[1] * 60 + +m[2] + 1 : 0;
 }
 
+/**
+ * 먼슬리 메모 칸에서 숨길 메모인지 (캘린더 일정 줄에 이미 보이는 것)
+ * 캘린더와 연동된 메모 또는 같은 날짜에 같은 글자의 캘린더 일정이 있는 메모
+ */
+function hiddenMemoTest_(rows) {
+  const cal = {};
+  rows.forEach(function (r) { if (r[1] === CONFIG.EVENT_TYPE.CAL) cal[dateKey_(r[0]) + '|' + r[2]] = true; });
+  return function (r) { return r[1] === CONFIG.EVENT_TYPE.MEMO && (r[5] === '연동' || !!cal[dateKey_(r[0]) + '|' + r[2]]); };
+}
+
 /** 그날 메모 줄들 (정렬 순서대로) */
 function memosOf_(rows, date) {
   const key = dateKey_(date);
@@ -80,7 +90,9 @@ function saveMemos_(entries) {
   entries.forEach(function (e) {
     const old = memosOf_(rows, e.date);
     const key = dateKey_(e.date);
-    rows = rows.filter(function (r) { return !(r[1] === CONFIG.EVENT_TYPE.MEMO && dateKey_(r[0]) === key); });
+    // 메모 칸에 안 보이는(캘린더 쪽에 보이는) 메모는 그대로 두고, 보이는 메모만 칸 내용으로 바꿈
+    const hidden = hiddenMemoTest_(rows);
+    rows = rows.filter(function (r) { return !(r[1] === CONFIG.EVENT_TYPE.MEMO && dateKey_(r[0]) === key && !hidden(r)); });
     String(e.text || '').split(/\r?\n/).map(function (t) { return t.trim(); }).filter(String).forEach(function (t) {
       const prev = old.find(function (r) { return r[2] === t; });
       rows.push([e.date, CONFIG.EVENT_TYPE.MEMO, t, eventSortKey_(t), prev ? prev[4] : '', prev ? prev[5] : '', prev ? prev[6] : '']);
@@ -115,8 +127,9 @@ function timetableRows_(range) {
 function scheduleLineFormula_(dateRef, k, emptyText) {
   const ev = CONFIG.SHEETS.EVENTS, n = CONFIG.SCHEDULE_LINES;
   // 공휴일은 날짜 표시용이라 일정 목록에서 뺌
-  const list = 'FILTER(' + colRef_(ev, 3) + ',' + colRef_(ev, 1) + '=' + dateRef + ',' + colRef_(ev, 6) + '<>"연동",' +
-    colRef_(ev, 2) + '<>"' + CONFIG.EVENT_TYPE.HOLIDAY + '")';
+  // UNIQUE: 같은 날짜·시간·제목이면 한 줄만 (캘린더 일정과 같은 메모가 있어도 한 번만 보임)
+  const list = 'UNIQUE(FILTER(' + colRef_(ev, 3) + ',' + colRef_(ev, 1) + '=' + dateRef + ',' + colRef_(ev, 6) + '<>"연동",' +
+    colRef_(ev, 2) + '<>"' + CONFIG.EVENT_TYPE.HOLIDAY + '"))';
   const empty = '"' + emptyText + '"';
   if (k < n) return '=IFERROR(INDEX(' + list + ',' + k + '),' + empty + ')';
   return '=IFERROR(LET(l,' + list + ',c,ROWS(l),IF(c>' + n + ',"+"&(c-' + (n - 1) + ')&"개 더",INDEX(l,' + n + '))),' + empty + ')';

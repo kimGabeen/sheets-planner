@@ -23,9 +23,8 @@ function include_(name) {
 /* ---------- 읽기 ---------- */
 
 /**
- * 처음 열 때 데이터 (날짜가 바뀌었으면 넘기기·새 주 처리 먼저)
- * 처음 화면(오늘·위클리)에 필요한 것만 담고, 먼슬리·타임라인은 그 탭을 열 때 따로 받음
- * 서버 캐시에 있으면 시트를 다시 읽지 않음 (시트가 바뀌면 캐시 무효화)
+ * 처음 열 때 데이터: 이번 주(오늘 포함) + 습관·카테고리 등 (날짜가 바뀌었으면 넘기기·새 주 처리 먼저)
+ * 다른 주·먼슬리·타임라인은 그 화면을 열 때 따로 받음. 서버 캐시는 시트가 바뀌면 무효화
  */
 function webBoot() {
   return withLock_(function () {
@@ -43,62 +42,88 @@ function webRefresh() {
   });
 }
 
+/** 아무 주나 (월요일 날짜 키) — 날짜 이동용 */
+function webGetWeek(mondayKey) {
+  return withLock_(function () {
+    const mon = mondayOf_(dateOnly_(mondayKey));
+    return cached_('week|' + dateKey_(mon), function () { return weekData_(mon); });
+  }, true);
+}
+
 /** 화면에 필요한 데이터 묶음 */
 function bootData_() {
   const today = today_();
-  const saved = JSON.parse(props_().getProperty('CARRY_OVERFLOW') || '{}');
   return {
     todayKey: dateKey_(today),
-    todayIndex: weeklyIndexOf_(today),
-    week: webWeekData_(),
+    week: weekData_(mondayOf_(today)),
     habits: getHabits_(),
     categories: getCategories_(),
     moods: CONFIG.MOOD_EMOJI,
-    overflow: saved.date === dateKey_(today) ? saved.items || [] : [],
     timetable: timetableData_(),
+    duplicates: findDuplicates_().length,
     savedAt: stamp_(),
   };
 }
 
-/** 위클리 시트를 한 번에 읽어 7일치 + 목표·꼭 끝낼 일로 정리 */
-function webWeekData_() {
-  const L = WEEKLY, sh = sheet_(CONFIG.SHEETS.WEEKLY);
-  const mon = weeklyMonday_();
-  const cols = Math.min(sh.getMaxColumns(), L.LAST_COL); // setup 전이라 메모 열이 없어도 동작
-  const range = sh.getRange(1, 1, L.MOOD_MEMO, cols);
-  const vals = range.getValues(), disp = range.getDisplayValues();
-  const v = function (r, c) { return c <= cols ? vals[r - 1][c - 1] : ''; };
-  const dv = function (r, c) { return String(disp[r - 1][c - 1]).trim(); };
+/** 그날 일정 열쇠 (완료 체크용): 캘린더는 일정 ID(없으면 날짜+시간+제목), 내 일정은 날짜+글자, 수업은 수업명 */
+function itemKey_(key, it) {
+  if (it.kind === 'tt') return 'tt|' + it.title;
+  if (it.kind === 'cal' && it.id) return 'cal|' + it.id;
+  return it.kind + '|' + key + '|' + it.text;
+}
 
-  const byDate = scheduleByDate_(readEvents_());
-  const habits = getHabits_();
-  const days = [];
-  for (let d = 0; d < 7 && mon; d++) {
-    const date = addDays_(mon, d), key = dateKey_(date), c = L.checkCol(d);
-    const todos = [];
-    for (let i = 0; i < CONFIG.TODO_ROWS; i++) {
-      const r = L.TODO_START + i;
-      todos.push([v(r, c) === true, dv(r, L.timeCol(d)), String(v(r, L.textCol(d))).trim(), String(v(r, L.memoCol(d)))]);
-    }
-    days.push({
-      key: key,
-      todos: todos,
-      habits: habits.map(function (n, i) { return v(L.HABIT_START + i, L.HABIT_DAY_COL + d) === true; }),
-      mood: { score: moodScore_(v(L.MOOD, c)), memo: String(v(L.MOOD_MEMO, c)).trim() },
-      schedule: (byDate[key] || {}).items || [],
-      holiday: (byDate[key] || {}).holiday || '',
-    });
-  }
-  const must = [];
-  for (let i = 0; i < CONFIG.MUST_COUNT; i++) {
-    must.push([v(L.MUST_START + i, 1) === true, String(v(L.MUST_START + i, 2)).trim()]);
-  }
-  return {
-    monday: mon ? dateKey_(mon) : '',
-    days: days,
-    info: [L.GOAL_ROW, L.REWARD_ROW, L.AFFIRM_ROW].map(function (r) { return String(v(r, L.INFO_VALUE_COL)).trim(); }),
-    must: must,
+/** 그날 일정 목록 (중복 없이, 완료 체크 반영, 체크된 일정은 아래로). day = 하루 데이터 */
+function scheduleOf_(date, day, byDate) {
+  const key = dateKey_(date);
+  const entry = (byDate || scheduleByDate_(readEvents_()))[key] || { items: [] };
+  const items = entry.items.map(function (it) {
+    const copy = JSON.parse(JSON.stringify(it));
+    copy.key = itemKey_(key, it);
+    copy.done = !!day.checks[copy.key];
+    return copy;
+  });
+  return items.filter(function (it) { return !it.done; }).concat(items.filter(function (it) { return it.done; }));
+}
+
+/** 하루 화면 데이터 (할 일 전체·습관·기분·일정·공휴일) — rev는 동시 수정 확인용 */
+function dayView_(date, todos, day, byDate, habits) {
+  const key = dateKey_(date);
+  const list = todos || getTodos_(date);
+  const d = day || getDayData_(date);
+  const rows = list.map(function (t) { return [t.done, todoTime_(t), t.text, t.memo, t.flag]; });
+  const view = {
+    key: key,
+    todos: rows,
+    habits: (habits || getHabits_()).map(function (n) { return !!(n && d.habits[n]); }),
+    mood: { score: d.mood.score || '', memo: d.mood.memo || '' },
+    schedule: scheduleOf_(date, d, byDate),
+    holiday: ((byDate || {})[key] || {}).holiday || '',
   };
+  view.rev = revOf_(view);
+  return view;
+}
+
+/** 내용으로 만든 짧은 버전 값 (다른 곳에서 바뀌었는지 비교) */
+function revOf_(obj) {
+  const s = JSON.stringify([obj.todos, obj.habits, obj.mood, (obj.schedule || []).map(function (i) { return [i.key, i.done]; })]);
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return String(h);
+}
+
+/** 한 주 데이터: 7일 + 목표·보상·확언 + 꼭 끝낼 일(개수 제한 없음) */
+function weekData_(monday) {
+  const mon = mondayOf_(monday), sun = addDays_(mon, 6);
+  const todos = todosByDate_(mon, sun), days = dayDataByDate_(mon, sun);
+  const byDate = scheduleByDate_(eventRowsAround_(mon));
+  const habits = getHabits_();
+  const list = [];
+  for (let d = 0; d < 7; d++) {
+    const date = addDays_(mon, d), key = dateKey_(date);
+    list.push(dayView_(date, todos[key] || [], days[key] || emptyDay_(), byDate, habits));
+  }
+  const w = getWeekData_(mon);
+  return { monday: dateKey_(mon), days: list, info: w.info, must: w.must.map(function (m) { return [m.done, m.text]; }) };
 }
 
 /**
@@ -108,21 +133,30 @@ function webWeekData_() {
  * ref = 수정·삭제 때 그 줄을 다시 찾는 열쇠 (종류 + 그날 같은 종류 중 순서 + 글자)
  */
 function scheduleByDate_(rows) {
-  const out = {}, count = {};
+  const out = {}, count = {}, seen = {};
+  const T = CONFIG.EVENT_TYPE;
+  // 날짜별 캘린더 일정 글자 (같은 날짜·시간·제목의 내 일정은 캘린더 쪽만 보이게)
+  const calText = {};
+  rows.forEach(function (r) { if (r[1] === T.CAL) calText[dateKey_(r[0]) + '|' + r[2]] = true; });
   rows.forEach(function (r) {
     const key = dateKey_(r[0]);
     const entry = out[key] = out[key] || { items: [], holiday: '' };
-    if (r[1] === CONFIG.EVENT_TYPE.HOLIDAY) {
+    if (r[1] === T.HOLIDAY) {
       entry.holiday = entry.holiday ? entry.holiday + ', ' + r[2] : r[2];
       return;
     }
     const kind = eventKind_(r[1]);
     const ck = key + '|' + kind;
     const index = count[ck] = count[ck] === undefined ? 0 : count[ck] + 1;
-    if (kind === 'memo' && r[5] === '연동') return;
+    if (kind === 'memo' && (r[5] === '연동' || calText[key + '|' + r[2]])) return; // 캘린더에 같은 일정이 있으면 하나만
+    // 같은 일정은 한 번만: 같은 ID(여러 번 불러온 것)든, ID가 달라도 같은 날짜·시간·제목(두 번 만든 것)이든
+    const dup = key + '|' + r[2];
+    if (seen[dup] || (kind === 'cal' && r[4] && seen['id:' + r[4] + '|' + key])) return;
+    seen[dup] = true;
+    if (kind === 'cal' && r[4]) seen['id:' + r[4] + '|' + key] = true;
     const p = parseMemoText_(r[2]);
     entry.items.push({ kind: kind, text: r[2], title: p.title, start: p.start, end: p.end, memo: String(r[6] || ''),
-      ref: { kind: kind, index: index, text: r[2] } });
+      id: kind === 'cal' ? String(r[4] || '') : '', ref: { kind: kind, index: index, text: r[2] } });
   });
   return out;
 }
@@ -229,89 +263,83 @@ function webGetTimeline(key) {
 
 /* ---------- 쓰기 (화면은 먼저 바뀌고, 여기서 뒤에서 저장) ---------- */
 
-/** 날짜 → 위클리 요일 번호 (이번 주가 아니면 오류) */
-function webDayIndex_(key) {
-  const d = weeklyIndexOf_(dateOnly_(key));
-  if (d < 0) throw new Error('이번 주 날짜만 바꿀 수 있어요');
-  return d;
+/** 저장 뒤 시트 화면 다시 그리기 (그 날짜가 위클리·오늘 시트에 보이면) */
+function refreshSheetsFor_(date) {
+  const d = weeklyIndexOf_(date);
+  if (d >= 0) renderWeekView_({ days: [d], habits: true, must: true, info: true });
+  const t = todaySheetDate_();
+  if (t && (dateKey_(t) === dateKey_(date) || mondayOf_(t).getTime() === mondayOf_(date).getTime())) renderTodayView_();
 }
 
-/** 위클리의 그 요일이 오늘이면 오늘 시트에도 반영 */
-function mirrorToToday_(d) {
-  if (weeklyIndexOf_(todaySheetDate_()) !== d) return;
-  copyBlocks_(sheet_(CONFIG.SHEETS.WEEKLY), sheet_(CONFIG.SHEETS.TODAY), todayBlocks_(d), 'w');
-}
-
-/** 할 일 10줄 저장 [체크, 시간, 내용, 메모] → 정렬된 결과 반환 (메모는 같은 줄 숨김 칸) */
-function webSetTodos(key, rows) {
+/**
+ * 할 일 전체 저장 [체크, 시간, 내용, 메모, 이월표시] (개수 제한 없음) → 정렬해서 저장소에
+ * baseRev가 지금 저장소와 다르면(시트 등 다른 곳에서 바뀜) 나중에 저장한 이 내용으로 맞추고 conflict 표시
+ * 반환 {week, conflict}
+ */
+function webSetTodos(key, rows, baseRev) {
   return withLock_(function () {
-    const L = WEEKLY, sh = sheet_(CONFIG.SHEETS.WEEKLY), d = webDayIndex_(key);
-    const clean = [];
-    for (let i = 0; i < CONFIG.TODO_ROWS; i++) {
-      const r = rows[i] || [];
-      const text = String(r[2] || '').trim();
-      clean.push([r[0] === true, String(r[1] || '').trim(), text, text ? String(r[3] || '').trim() : '']);
-    }
-    sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 3).setValues(clean.map(function (r) { return r.slice(0, 3); }));
-    memoRange_(sh, L.TODO_START, L.memoCol(d)).setValues(clean.map(function (r) { return [r[3]]; }));
-    sortTodos_(sh, L.TODO_START, L.checkCol(d), L.memoCol(d));
-    mirrorToToday_(d);
-    archiveDayLive_(dateOnly_(key));
-    const range = sh.getRange(L.TODO_START, L.checkCol(d), CONFIG.TODO_ROWS, 3);
-    const vals = range.getValues(), disp = range.getDisplayValues();
-    const memos = memoRange_(sh, L.TODO_START, L.memoCol(d)).getValues();
-    return vals.map(function (r, i) { return [r[0] === true, String(disp[i][1]).trim(), String(r[2]).trim(), String(memos[i][0])]; });
+    const date = dateOnly_(key);
+    const conflict = !!baseRev && dayView_(date).rev !== baseRev;
+    setTodos_(date, (rows || []).map(function (r) {
+      const t = splitRange_(r[1]);
+      return { done: r[0] === true, start: t.start, end: t.end, text: r[2], memo: r[3], flag: r[4] || '' };
+    }));
+    archiveDayLive_(date);
+    refreshSheetsFor_(date);
+    return { week: weekData_(mondayOf_(date)), conflict: conflict };
   });
 }
 
-/** 습관 체크 */
-function webSetHabit(key, index, done) {
+/** 습관 체크 (습관 이름 기준) */
+function webSetHabit(key, name, done) {
   return withLock_(function () {
-    const L = WEEKLY, d = webDayIndex_(key);
-    sheet_(CONFIG.SHEETS.WEEKLY).getRange(L.HABIT_START + index, L.HABIT_DAY_COL + d).setValue(done === true);
-    mirrorToToday_(d);
-    archiveDayLive_(dateOnly_(key));
-    return true;
+    const date = dateOnly_(key);
+    setHabitDone_(date, String(name), done === true);
+    archiveDayLive_(date);
+    refreshSheetsFor_(date);
+    return { week: weekData_(mondayOf_(date)) };
   });
 }
 
 /** 기분 점수(1~5 또는 '') + 한 줄 메모 */
 function webSetMood(key, score, memo) {
   return withLock_(function () {
-    const L = WEEKLY, sh = sheet_(CONFIG.SHEETS.WEEKLY), d = webDayIndex_(key);
-    sh.getRange(L.MOOD, L.checkCol(d)).setValue(score ? CONFIG.MOODS[score - 1] : '');
-    sh.getRange(L.MOOD_MEMO, L.checkCol(d)).setValue(String(memo || '').trim());
-    mirrorToToday_(d);
-    archiveDayLive_(dateOnly_(key));
-    return true;
+    const date = dateOnly_(key);
+    setMoodData_(date, score, memo);
+    archiveDayLive_(date);
+    refreshSheetsFor_(date);
+    return { week: weekData_(mondayOf_(date)) };
   });
 }
 
-/** 이번 주 꼭 끝낼 일 5개 [[체크, 내용]] */
-function webSetMust(rows) {
+/** 그 주 꼭 끝낼 일 [[체크, 내용]] (개수 제한 없음) */
+function webSetMust(mondayKey, rows) {
   return withLock_(function () {
-    const L = WEEKLY, sh = sheet_(CONFIG.SHEETS.WEEKLY);
-    const clean = [];
-    for (let i = 0; i < CONFIG.MUST_COUNT; i++) {
-      const r = rows[i] || [];
-      clean.push([r[0] === true, String(r[1] || '').trim()]);
-    }
-    sh.getRange(L.MUST_START, 1, CONFIG.MUST_COUNT, 2).setValues(clean);
-    const td = weeklyIndexOf_(todaySheetDate_());
-    if (td >= 0) mirrorToToday_(td);
-    archiveWeekGoals_();
-    return true;
+    const mon = mondayOf_(dateOnly_(mondayKey));
+    setWeekMust_(mon, (rows || []).map(function (r) { return { done: r[0] === true, text: r[1] }; }));
+    if (mon <= today_()) archiveWeekGoals_(mon);
+    refreshSheetsFor_(mon);
+    return { week: weekData_(mon) };
   });
 }
 
-/** 이번 주 목표·보상·확언 */
-function webSetWeekInfo(info) {
+/** 그 주 목표·보상·확언 */
+function webSetWeekInfo(mondayKey, info) {
   return withLock_(function () {
-    const L = WEEKLY, sh = sheet_(CONFIG.SHEETS.WEEKLY);
-    [L.GOAL_ROW, L.REWARD_ROW, L.AFFIRM_ROW].forEach(function (r, i) {
-      sh.getRange(r, L.INFO_VALUE_COL).setValue(String(info[i] || '').trim());
-    });
-    return true;
+    const mon = mondayOf_(dateOnly_(mondayKey));
+    setWeekInfo_(mon, info || []);
+    refreshSheetsFor_(mon);
+    return { week: weekData_(mon) };
+  });
+}
+
+/** 일정 완료 체크 (구글 캘린더 일정 자체는 바꾸지 않음) */
+function webCheckItem(key, itemKey, done) {
+  return withLock_(function () {
+    const date = dateOnly_(key);
+    setItemCheck_(date, String(itemKey), done === true);
+    archiveDayLive_(date);
+    return { week: weekData_(mondayOf_(date)) };
   });
 }
 
@@ -347,7 +375,7 @@ function webAddEvent(input) {
     } catch (err) {
       res = { ok: false, message: '오류: ' + err.message };
     }
-    res.week = webWeekData_();
+    res.week = weekData_(mondayOf_(dateOnly_(input.date) || today_()));
     return res;
   });
 }
@@ -382,8 +410,10 @@ function itemText_(shape) {
 }
 
 /** 결과에 최신 위클리(+ 먼슬리) 붙이기 → 화면이 바로 갱신 */
-function withViews_(res, y, m) {
-  res.week = webWeekData_();
+function withViews_(res, y, m, key) {
+  const date = dateOnly_(key) || today_();
+  refreshSheetsFor_(date);
+  res.week = weekData_(mondayOf_(date));
   res.month = y ? monthData_(y, m) : null;
   return res;
 }
@@ -410,19 +440,23 @@ function updateLinkedMemos_(id, text, memo) {
  * ref.kind = 'memo' → 내 일정 수정 (캘린더에도 있으면 같이 수정)
  * 반환 {ok, message, week, month}
  */
-function webSaveItem(key, ref, item, y, m) {
+function webSaveItem(key, ref, item, y, m, requestId) {
   return withLock_(function () {
     const date = dateOnly_(key);
     let res;
+    // 같은 요청이 두 번 오면(연타·재시도) 한 번만 처리
+    const cache = CacheService.getScriptCache();
+    if (requestId && cache.get('req|' + requestId)) return withViews_({ ok: true, message: '이미 저장했어요' }, y, m, key);
+    if (requestId) cache.put('req|' + requestId, '1', 600);
     try {
       const shape = eventShape_(date, item.start, item.end, item.title);
-      if (shape.error) return withViews_({ ok: false, message: shape.error }, y, m);
+      if (shape.error) return withViews_({ ok: false, message: shape.error }, y, m, key);
       const text = itemText_(shape);
       const memo = String(item.memo || '').trim(); // 숨김 메모 (목록엔 안 보임)
 
       if (!ref) {
         const cal = createCalendarEvent_(date, item.start, item.end, item.title, memo); // 안에서 캘린더 다시 불러옴
-        if (!cal.ok) return withViews_({ ok: false, message: cal.message }, y, m);
+        if (!cal.ok) return withViews_({ ok: false, message: cal.message }, y, m, key);
         const rows = readEvents_();
         rows.push([date, CONFIG.EVENT_TYPE.MEMO, text, eventSortKey_(text), cal.id, '연동', memo]);
         writeEvents_(rows);
@@ -454,7 +488,7 @@ function webSaveItem(key, ref, item, y, m) {
     } catch (err) {
       res = { ok: false, message: err.message };
     }
-    return withViews_(res, y, m);
+    return withViews_(res, y, m, key);
   });
 }
 
@@ -484,12 +518,12 @@ function webDeleteItem(key, ref, y, m) {
     } catch (err) {
       res = { ok: false, message: err.message };
     }
-    return withViews_(res, y, m);
+    return withViews_(res, y, m, key);
   });
 }
 
 /** 고정 시간표 저장 → 일정 칸 다시 만들기 → {timetable, week} */
-function webSetTimetable(tt) {
+function webSetTimetable(tt, mondayKey) {
   return withLock_(function () {
     const rows = (tt.rows || []).map(function (r) {
       const st = normTime_(r.start), en = normTime_(r.end), name = String(r.name || '').trim();
@@ -503,7 +537,7 @@ function webSetTimetable(tt) {
     if (start && end && end < start) throw new Error('학기 종료가 시작보다 빨라요');
     setTimetable_({ start: start, end: end, rows: rows });
     refreshTimetableEvents_();
-    return { timetable: timetableData_(), week: webWeekData_() };
+    return { timetable: timetableData_(), week: weekData_(mondayOf_(dateOnly_(mondayKey) || today_())) };
   });
 }
 
@@ -514,9 +548,75 @@ function webSetHabits(list) {
       return { name: String(h.name || '').trim(), from: h.from === null || h.from === undefined ? null : Number(h.from) };
     }).filter(function (h) { return h.name; });
     setHabits_(clean);
-    const td = weeklyIndexOf_(todaySheetDate_());
-    if (td >= 0) mirrorToToday_(td);
     archiveDayLive_(today_()); // 오늘만 새 이름으로 다시 저장, 지난 기록은 그대로
+    renderWeekView_();
+    renderTodayView_();
     return bootData_();
+  });
+}
+
+/* ---------- 이미 생긴 중복 일정 정리 ---------- */
+
+/**
+ * 중복 찾기 (지우기 전에 목록으로 보여 줌)
+ * - 구글 캘린더: 같은 날짜·시간·제목 일정이 여러 개 → 하나만 남김 (먼슬리 메모와 연동된 것 우선)
+ * - 먼슬리 메모: 같은 날짜·글자 메모가 여러 줄 → 하나만 남김
+ * 반환 [{date, text, kind:'calendar'|'memo', count, remove}]
+ */
+function findDuplicates_() {
+  const rows = readEvents_(), T = CONFIG.EVENT_TYPE;
+  const linked = {};
+  rows.forEach(function (r) { if (r[1] === T.MEMO && r[4]) linked[r[4]] = true; });
+  const groups = {};
+  rows.forEach(function (r, i) {
+    if (r[1] !== T.CAL && r[1] !== T.MEMO) return;
+    const k = r[1] + '|' + dateKey_(r[0]) + '|' + r[2];
+    (groups[k] = groups[k] || []).push(i);
+  });
+  const out = [];
+  Object.keys(groups).forEach(function (k) {
+    const list = groups[k];
+    const ids = {};
+    list.forEach(function (i) { ids[rows[i][4] || ('row' + i)] = i; });
+    const uniq = Object.keys(ids);
+    if (rows[list[0]][1] === T.CAL && uniq.length < 2) return; // 같은 일정이 여러 날에 걸친 것뿐
+    if (list.length < 2) return;
+    const r = rows[list[0]];
+    let keepId = '';
+    if (r[1] === T.CAL) keepId = uniq.find(function (id) { return linked[id]; }) || uniq[0];
+    out.push({ date: dateKey_(r[0]), text: r[2], kind: r[1] === T.CAL ? 'calendar' : 'memo', count: r[1] === T.CAL ? uniq.length : list.length,
+      remove: r[1] === T.CAL ? uniq.filter(function (id) { return id !== keepId; }) : list.slice(1).length });
+  });
+  return out.sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+}
+
+/** 중복 목록 보기 */
+function webFindDuplicates() {
+  return withLock_(function () { return findDuplicates_(); }, true);
+}
+
+/** 중복 정리 (화면에서 확인한 목록 개수가 그대로일 때만) → 남은 중복 수 */
+function webCleanDuplicates(expected) {
+  return withLock_(function () {
+    const dups = findDuplicates_();
+    if (dups.length !== expected) throw new Error('목록이 바뀌었어요. 다시 확인해 주세요');
+    let removed = 0;
+    dups.forEach(function (g) {
+      if (g.kind !== 'calendar') return;
+      g.remove.forEach(function (id) { if (deleteCalendarEvent_(id, null, null)) removed++; });
+    });
+    // 메모 중복: 같은 날짜·글자는 첫 줄만 남김
+    const rows = readEvents_(), seen = {};
+    const kept = rows.filter(function (r) {
+      if (r[1] !== CONFIG.EVENT_TYPE.MEMO) return true;
+      const k = dateKey_(r[0]) + '|' + r[2];
+      if (seen[k]) { removed++; return false; }
+      seen[k] = true;
+      return true;
+    });
+    writeEvents_(kept);
+    syncCalendar_();
+    refreshMonthMemos_();
+    return { removed: removed, left: findDuplicates_().length };
   });
 }

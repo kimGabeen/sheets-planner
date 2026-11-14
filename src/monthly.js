@@ -239,8 +239,10 @@ function refreshMonthMemos_() {
   if (!ym) return;
   const start = monthGridStart_(ym);
   const memos = {};
-  readEvents_().forEach(function (r) {
-    if (r[1] !== CONFIG.EVENT_TYPE.MEMO) return;
+  const rows = readEvents_();
+  const hidden = hiddenMemoTest_(rows); // 캘린더 줄에 이미 보이는 메모는 메모 칸에 또 쓰지 않음 (중복 표시 방지)
+  rows.forEach(function (r) {
+    if (r[1] !== CONFIG.EVENT_TYPE.MEMO || hidden(r)) return;
     const k = dateKey_(r[0]);
     memos[k] = memos[k] ? memos[k] + '\n' + r[2] : r[2]; // 한 줄에 일정 하나
   });
